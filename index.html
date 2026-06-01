@@ -1011,11 +1011,14 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.0.1";
+const APP_VERSION = "5.1.0";
 const APP_BUILD = "2026-06-01";
-// 5.0.1: InterSign-logo på login-skærmen (genbruger headerens base64-billede, ingen
-//   duplikering).
-// 5.0.0: ONLINE-MIGRATION trin 1 — Supabase auth + login-skærm. Datalaget UÆNDRET.
+// 5.1.0: ONLINE-MIGRATION trin 2 — brand-profiler deles via Supabase (icepim_brands).
+//   In-memory cache fyldt ved login; synkrone funktioner udadtil; localStorage som backup;
+//   fire-and-forget skrivning ved opret/rediger/slet/nulstil; auto-lift af lokale profiler
+//   hvis skyen er tom. Du og Mik deler nu egne profiler + overrides af indbyggede.
+//   (Indbyggede Hisense/BrightSign bor stadig i koden.)
+// 5.0.1: InterSign-logo på login-skærmen.
 // 4.10.9: Mere luft mellem features (28px).
 // 4.10.7: Standard test-ikon URL lagt ind i appen.
 // 4.10.6: Feature-ikon 75x75, tekst i ren spalte (margin-left 95px).
@@ -1327,11 +1330,65 @@ const SUPABASE_KEY = "sb_publishable_xxBbQOi6aTGpai0YTb6d9A_WGvr5BI5";
 let supa = null;
 let currentUser = null;
 let appInitDone = false;
+// *** NY *** (v5.1) Brand-profiler deles via Supabase-tabellen icepim_brands.
+// In-memory cache fyldt ved login; synkrone funktioner udadtil; localStorage som backup.
+let _customBrandsCache = null;
+
 function loadCustomBrands() {
+  if (_customBrandsCache) return _customBrandsCache;
   try { return JSON.parse(localStorage.getItem(CUSTOM_BRANDS_KEY)) || {}; }
   catch (e) { return {}; }
 }
-function saveCustomBrands(obj) { localStorage.setItem(CUSTOM_BRANDS_KEY, JSON.stringify(obj)); }
+function saveCustomBrands(obj) {
+  _customBrandsCache = obj;
+  try { localStorage.setItem(CUSTOM_BRANDS_KEY, JSON.stringify(obj)); } catch (e) { /* backup */ }
+}
+
+// Fyld brand-cache fra skyen ved login. Auto-lift: hvis skyen er tom OG der ligger
+// egne profiler lokalt, løftes de op (engangs-migration). Kaldes FØR init().
+async function loadBrandsFromCloud() {
+  if (!supa) return;
+  try {
+    const { data, error } = await supa.from("icepim_brands").select("brand_key, config");
+    if (error) { console.warn("Sky: kunne ikke hente brands:", error.message); return; }
+    const obj = {};
+    (data || []).forEach(r => { if (r && r.brand_key) obj[r.brand_key] = r.config || {}; });
+    // Auto-lift fra localStorage hvis skyen er tom
+    let local = {};
+    try { local = JSON.parse(localStorage.getItem(CUSTOM_BRANDS_KEY)) || {}; } catch (e) {}
+    if ((data || []).length === 0 && Object.keys(local).length > 0) {
+      for (const [k, cfg] of Object.entries(local)) {
+        await cloudUpsertBrand(k, cfg);
+        obj[k] = cfg;
+      }
+      console.info("Sky: løftede " + Object.keys(local).length + " lokale profiler op i skyen.");
+    }
+    _customBrandsCache = obj;
+    try { localStorage.setItem(CUSTOM_BRANDS_KEY, JSON.stringify(obj)); } catch (e) {}
+  } catch (e) {
+    console.warn("Sky: fejl ved hentning af brands:", e);
+  }
+}
+
+// Fire-and-forget skrivninger (UI'et venter ikke).
+async function cloudUpsertBrand(key, config) {
+  if (!supa) return;
+  try {
+    const { error } = await supa.from("icepim_brands").upsert({
+      brand_key: key,
+      config: config,
+      last_user_email: currentUser ? currentUser.email : null
+    });
+    if (error) console.warn("Sky: kunne ikke gemme brand '" + key + "':", error.message);
+  } catch (e) { console.warn("Sky: fejl ved gem af brand:", e); }
+}
+async function cloudDeleteBrand(key) {
+  if (!supa) return;
+  try {
+    const { error } = await supa.from("icepim_brands").delete().eq("brand_key", key);
+    if (error) console.warn("Sky: kunne ikke slette brand '" + key + "':", error.message);
+  } catch (e) { console.warn("Sky: fejl ved sletning af brand:", e); }
+}
 function isBuiltinBrand(key) { return Object.prototype.hasOwnProperty.call(BUILTIN_BRANDS, key); }
 // Genopbyg BRANDS = indbyggede defaults + custom-overrides/-tilføjelser, og opdatér dropdown.
 function rebuildBrands() {
@@ -1609,6 +1666,7 @@ window.saveBrand = (editKey) => {
   const custom = loadCustomBrands();
   custom[key] = entry;
   saveCustomBrands(custom);
+  cloudUpsertBrand(key, entry); // *** NY *** (v5.1) del til skyen
   rebuildBrands();
   _brandEditKey = null;
   renderBrandsList();
@@ -1620,6 +1678,7 @@ window.deleteBrand = (key) => {
   const custom = loadCustomBrands();
   delete custom[key];
   saveCustomBrands(custom);
+  cloudDeleteBrand(key); // *** NY *** (v5.1) slet i skyen
   rebuildBrands();
   renderBrandsList();
 };
@@ -1629,6 +1688,7 @@ window.resetBrand = (key) => {
   const custom = loadCustomBrands();
   delete custom[key];
   saveCustomBrands(custom);
+  cloudDeleteBrand(key); // *** NY *** (v5.1) fjern override i skyen (begge ser standarden igen)
   rebuildBrands();
   renderBrandsList();
 };
@@ -3452,11 +3512,15 @@ function showLogin(msg) {
   $("#login-btn").disabled = false;
 }
 
-function showApp() {
+async function showApp() {
   $("#login-overlay").style.display = "none";
   $("#app-container").style.display = "";
   if ($("#user-email")) $("#user-email").textContent = currentUser ? currentUser.email : "";
-  if (!appInitDone) { appInitDone = true; init(); }
+  if (!appInitDone) {
+    appInitDone = true;
+    await loadBrandsFromCloud(); // *** NY *** (v5.1) fyld brand-cache + auto-lift FØR init
+    init();
+  }
 }
 
 async function doLogin() {
@@ -3469,7 +3533,7 @@ async function doLogin() {
     const { data, error } = await supa.auth.signInWithPassword({ email, password });
     if (error) { showLogin("Login mislykkedes: " + error.message); return; }
     currentUser = data.user;
-    showApp();
+    await showApp();
   } catch (e) {
     showLogin("Uventet fejl: " + (e && e.message ? e.message : e));
   }
@@ -3504,7 +3568,7 @@ async function bootAuth() {
     const { data } = await supa.auth.getSession();
     if (data && data.session) {
       currentUser = data.session.user;
-      showApp();
+      await showApp();
       return;
     }
   } catch (e) { /* falder igennem til login */ }
