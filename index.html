@@ -1011,8 +1011,12 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.1.1";
+const APP_VERSION = "5.2.0";
 const APP_BUILD = "2026-06-01";
+// 5.2.0: ONLINE-MIGRATION trin 3 — delte indstillinger via Supabase (icepim_settings):
+//   model, bullet-separator, toggles, test-ikon, valgt brand. Hentes ved login, gemmes
+//   ved ændring. API-NØGLE og SYSTEM-PROMPT forbliver lokale pr. maskine.
+// 5.1.1: Auto-lift kun engangs (flag) — slettede profiler genoplives ikke.
 // 5.1.0: ONLINE-MIGRATION trin 2 — brand-profiler deles via Supabase (icepim_brands).
 //   In-memory cache fyldt ved login; synkrone funktioner udadtil; localStorage som backup;
 //   fire-and-forget skrivning ved opret/rediger/slet/nulstil; auto-lift af lokale profiler
@@ -1392,6 +1396,51 @@ async function cloudDeleteBrand(key) {
     const { error } = await supa.from("icepim_brands").delete().eq("brand_key", key);
     if (error) console.warn("Sky: kunne ikke slette brand '" + key + "':", error.message);
   } catch (e) { console.warn("Sky: fejl ved sletning af brand:", e); }
+}
+
+// *** NY *** (v5.2) Delte indstillinger (icepim_settings, singleton id='global').
+// Kun delte felter — IKKE API-nøgle og IKKE system-prompt (de forbliver lokale).
+function gatherSettings() {
+  return {
+    model: localStorage.getItem(LS.model) || "",
+    htmlMode: localStorage.getItem(LS.htmlMode) || "",
+    bulletSep: localStorage.getItem(LS.bulletSep) || "",
+    shopifyImgFix: localStorage.getItem(LS.shopifyImgFix) || "",
+    testIcon: localStorage.getItem(LS.testIcon),
+    brand: localStorage.getItem(LS.brand) || ""
+  };
+}
+function applySettingsToLocal(d) {
+  if (!d) return;
+  if (d.model != null && d.model !== "") localStorage.setItem(LS.model, d.model);
+  if (d.htmlMode != null && d.htmlMode !== "") localStorage.setItem(LS.htmlMode, d.htmlMode);
+  if (d.bulletSep != null && d.bulletSep !== "") localStorage.setItem(LS.bulletSep, d.bulletSep);
+  if (d.shopifyImgFix != null && d.shopifyImgFix !== "") localStorage.setItem(LS.shopifyImgFix, d.shopifyImgFix);
+  if (d.testIcon != null) localStorage.setItem(LS.testIcon, d.testIcon);
+  if (d.brand != null && d.brand !== "") localStorage.setItem(LS.brand, d.brand);
+}
+async function loadSettingsFromCloud() {
+  if (!supa) return;
+  try {
+    const { data, error } = await supa.from("icepim_settings").select("data").eq("id", "global").maybeSingle();
+    if (error) { console.warn("Sky: kunne ikke hente indstillinger:", error.message); return; }
+    if (data && data.data) {
+      applySettingsToLocal(data.data); // skyen vinder ved login
+    } else {
+      await cloudSaveSettings(); // ingen række endnu — seed fra lokale
+    }
+  } catch (e) { console.warn("Sky: fejl ved hentning af indstillinger:", e); }
+}
+async function cloudSaveSettings() {
+  if (!supa) return;
+  try {
+    const { error } = await supa.from("icepim_settings").upsert({
+      id: "global",
+      data: gatherSettings(),
+      last_user_email: currentUser ? currentUser.email : null
+    });
+    if (error) console.warn("Sky: kunne ikke gemme indstillinger:", error.message);
+  } catch (e) { console.warn("Sky: fejl ved gem af indstillinger:", e); }
 }
 function isBuiltinBrand(key) { return Object.prototype.hasOwnProperty.call(BUILTIN_BRANDS, key); }
 // Genopbyg BRANDS = indbyggede defaults + custom-overrides/-tilføjelser, og opdatér dropdown.
@@ -3424,25 +3473,29 @@ function init() {
 
   $("#save-key").addEventListener("click", saveApiKey);
   $("#clear-key").addEventListener("click", clearApiKey);
-  $("#model").addEventListener("change", e => localStorage.setItem(LS.model, e.target.value));
+  $("#model").addEventListener("change", e => { localStorage.setItem(LS.model, e.target.value); cloudSaveSettings(); });
   $("#html-mode").addEventListener("change", e => {
     localStorage.setItem(LS.htmlMode, e.target.checked ? "1" : "0");
+    cloudSaveSettings();
     renderResults();
   });
   $("#bullet-sep").addEventListener("change", e => {
     localStorage.setItem(LS.bulletSep, e.target.value);
+    cloudSaveSettings();
     state.products.forEach(p => { if (p.status === "done") p.issues = detectIssues(p); });
     renderResults();
   });
   $("#max-images").addEventListener("change", () => renderResults());
-  $("#shopify-img-fix").addEventListener("change", e => localStorage.setItem(LS.shopifyImgFix, e.target.checked ? "1" : "0"));
+  $("#shopify-img-fix").addEventListener("change", e => { localStorage.setItem(LS.shopifyImgFix, e.target.checked ? "1" : "0"); cloudSaveSettings(); });
   // *** NY *** (4.10.4) Test-ikon: gem og opdatér resultater så preview viser float straks.
   $("#test-icon-url").addEventListener("change", e => {
     localStorage.setItem(LS.testIcon, e.target.value.trim());
+    cloudSaveSettings();
     renderResults();
   });
   $("#brand").addEventListener("change", e => {
     localStorage.setItem(LS.brand, e.target.value);
+    cloudSaveSettings();
     renderPdfList();
   });
   $("#input-text").addEventListener("input", () => renderPdfList());
@@ -3523,6 +3576,7 @@ async function showApp() {
   if (!appInitDone) {
     appInitDone = true;
     await loadBrandsFromCloud(); // *** NY *** (v5.1) fyld brand-cache + auto-lift FØR init
+    await loadSettingsFromCloud(); // *** NY *** (v5.2) hent delte indstillinger FØR init
     init();
   }
 }
