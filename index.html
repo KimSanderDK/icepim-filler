@@ -1011,7 +1011,7 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.1.0";
+const APP_VERSION = "5.1.1";
 const APP_BUILD = "2026-06-01";
 // 5.1.0: ONLINE-MIGRATION trin 2 — brand-profiler deles via Supabase (icepim_brands).
 //   In-memory cache fyldt ved login; synkrone funktioner udadtil; localStorage som backup;
@@ -1353,16 +1353,20 @@ async function loadBrandsFromCloud() {
     if (error) { console.warn("Sky: kunne ikke hente brands:", error.message); return; }
     const obj = {};
     (data || []).forEach(r => { if (r && r.brand_key) obj[r.brand_key] = r.config || {}; });
-    // Auto-lift fra localStorage hvis skyen er tom
+    // Auto-lift fra localStorage — KUN allerførste gang (engangs-migration).
+    // Ellers ville en bruger der stadig har en slettet profil lokalt genoplive den.
+    const MIGR_FLAG = "icepim_brands_migrated_v1";
+    const migrated = localStorage.getItem(MIGR_FLAG) === "1";
     let local = {};
     try { local = JSON.parse(localStorage.getItem(CUSTOM_BRANDS_KEY)) || {}; } catch (e) {}
-    if ((data || []).length === 0 && Object.keys(local).length > 0) {
+    if (!migrated && (data || []).length === 0 && Object.keys(local).length > 0) {
       for (const [k, cfg] of Object.entries(local)) {
         await cloudUpsertBrand(k, cfg);
         obj[k] = cfg;
       }
-      console.info("Sky: løftede " + Object.keys(local).length + " lokale profiler op i skyen.");
+      console.info("Sky: løftede " + Object.keys(local).length + " lokale profiler op (engangs).");
     }
+    localStorage.setItem(MIGR_FLAG, "1"); // migration sket — auto-lift kører aldrig igen
     _customBrandsCache = obj;
     try { localStorage.setItem(CUSTOM_BRANDS_KEY, JSON.stringify(obj)); } catch (e) {}
   } catch (e) {
