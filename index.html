@@ -374,6 +374,10 @@ details.settings-advanced[open] > summary { border-color: var(--accent); margin-
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px;
 }
 .session-card .sc-count { color: var(--ink-muted); font-size: 12px; }
+.session-card .sc-owner {
+  background: var(--ink); color: #fff; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.3px; padding: 2px 7px; border-radius: 99px;
+}
 .session-card .sc-mpns {
   margin: 10px 0; display: flex; flex-wrap: wrap; gap: 5px;
 }
@@ -1011,11 +1015,13 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.2.0";
+const APP_VERSION = "5.3.0";
 const APP_BUILD = "2026-06-01";
-// 5.2.0: ONLINE-MIGRATION trin 3 — delte indstillinger via Supabase (icepim_settings):
-//   model, bullet-separator, toggles, test-ikon, valgt brand. Hentes ved login, gemmes
-//   ved ændring. API-NØGLE og SYSTEM-PROMPT forbliver lokale pr. maskine.
+// 5.3.0: ONLINE-MIGRATION trin 4 — delte sessioner via Supabase (icepim_sessions).
+//   Alle ser hinandens sessioner (mærket med initialer), men kun egne kan slettes.
+//   Cap 20 EGNE pr. bruger; engangs-lift af lokale sessioner (flag). Andres sessioner
+//   åbnes som visning (ikke gemt videre). API-nøgle + system-prompt forbliver lokale.
+// 5.2.0: ONLINE-MIGRATION trin 3 — delte indstillinger.
 // 5.1.1: Auto-lift kun engangs (flag) — slettede profiler genoplives ikke.
 // 5.1.0: ONLINE-MIGRATION trin 2 — brand-profiler deles via Supabase (icepim_brands).
 //   In-memory cache fyldt ved login; synkrone funktioner udadtil; localStorage som backup;
@@ -1442,6 +1448,76 @@ async function cloudSaveSettings() {
     if (error) console.warn("Sky: kunne ikke gemme indstillinger:", error.message);
   } catch (e) { console.warn("Sky: fejl ved gem af indstillinger:", e); }
 }
+
+// *** NY *** (v5.3) Delte sessioner (icepim_sessions): læs alle, skriv egne.
+async function loadSessionsFromCloud() {
+  if (!supa) return;
+  try {
+    const { data, error } = await supa.from("icepim_sessions")
+      .select("id, user_id, user_initials, user_email, profile, products, created_at, updated_at")
+      .order("updated_at", { ascending: false });
+    if (error) { console.warn("Sky: kunne ikke hente sessioner:", error.message); return; }
+    let arr = (data || []).map(r => ({
+      id: r.id,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      brand: r.profile || "",
+      products: r.products || [],
+      ownerId: r.user_id,
+      ownerEmail: r.user_email || "",
+      initials: r.user_initials || initialsFromEmail(r.user_email)
+    }));
+    // Engangs-lift af lokale sessioner (flag)
+    const MIGR = "icepim_sessions_migrated_v1";
+    if (currentUser && localStorage.getItem(MIGR) !== "1") {
+      let local = [];
+      try { local = JSON.parse(localStorage.getItem(SESSIONS_KEY)) || []; } catch (e) {}
+      for (const s of local) {
+        await cloudUpsertSession(s, true);
+        if (!arr.find(x => x.id === s.id)) {
+          arr.push({ ...s, ownerId: currentUser.id, ownerEmail: currentUser.email, initials: initialsFromEmail(currentUser.email) });
+        }
+      }
+      localStorage.setItem(MIGR, "1");
+    }
+    _sessionsCache = arr;
+    try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(arr)); } catch (e) {}
+  } catch (e) { console.warn("Sky: fejl ved hentning af sessioner:", e); }
+}
+async function cloudUpsertSession(s, preserveCreated) {
+  if (!supa || !currentUser) return;
+  try {
+    const row = {
+      id: s.id,
+      user_id: currentUser.id,
+      user_initials: initialsFromEmail(currentUser.email),
+      user_email: currentUser.email,
+      profile: s.brand || "",
+      products: s.products || []
+    };
+    if (preserveCreated && s.createdAt) row.created_at = s.createdAt;
+    const { error } = await supa.from("icepim_sessions").upsert(row);
+    if (error) console.warn("Sky: kunne ikke gemme session:", error.message);
+  } catch (e) { console.warn("Sky: fejl ved gem af session:", e); }
+}
+async function cloudDeleteSession(id) {
+  if (!supa) return;
+  try {
+    const { error } = await supa.from("icepim_sessions").delete().eq("id", id);
+    if (error) console.warn("Sky: kunne ikke slette session:", error.message);
+  } catch (e) { console.warn("Sky: fejl ved sletning af session:", e); }
+}
+// Behold højst 20 EGNE sessioner i skyen (ældste fjernes).
+function enforceOwnSessionCap() {
+  if (!currentUser || !_sessionsCache) return;
+  const own = _sessionsCache
+    .filter(s => s.ownerId === currentUser.id)
+    .sort((a, b) => (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || ""));
+  own.slice(SESSIONS_MAX_PER_USER).forEach(s => {
+    cloudDeleteSession(s.id);
+    _sessionsCache = _sessionsCache.filter(x => x.id !== s.id);
+  });
+}
 function isBuiltinBrand(key) { return Object.prototype.hasOwnProperty.call(BUILTIN_BRANDS, key); }
 // Genopbyg BRANDS = indbyggede defaults + custom-overrides/-tilføjelser, og opdatér dropdown.
 function rebuildBrands() {
@@ -1513,25 +1589,32 @@ const state = {
 const SESSIONS_KEY = "icepim_sessions_v1";
 const SESSIONS_MAX = 25;
 const SESSIONS_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const SESSIONS_MAX_PER_USER = 20; // *** NY *** (v5.3) cap pr. bruger i skyen
+let _sessionsCache = null;        // *** NY *** (v5.3) delt cache fyldt ved login
+
+function initialsFromEmail(email) {
+  if (!email) return "?";
+  const local = email.split("@")[0];
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return local.slice(0, 3).toUpperCase();
+}
 
 function loadSessions() {
+  if (_sessionsCache) return _sessionsCache;
   try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)) || []; }
   catch (e) { return []; }
 }
 function persistSessions(sessions) {
-  // Auto-slet > 14 dage (efter sidste aktivitet), nyeste først, cap 25.
-  const cutoff = Date.now() - SESSIONS_MAX_AGE_MS;
-  let arr = sessions
-    .filter(s => new Date(s.updatedAt || s.createdAt).getTime() >= cutoff)
-    .sort((a, b) => (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || ""))
-    .slice(0, SESSIONS_MAX);
+  // *** NY *** (v5.3) cache + localStorage-backup. Sky håndteres pr. operation.
+  _sessionsCache = sessions;
   try {
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(arr));
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
   } catch (e) {
-    // Quota sprængt — drop ældste indtil det passer.
+    let arr = sessions.slice();
     while (arr.length > 1) {
       arr.pop();
-      try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(arr)); return; } catch (e2) { /* prøv igen */ }
+      try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(arr)); _sessionsCache = arr; return; } catch (e2) {}
     }
   }
 }
@@ -1554,9 +1637,14 @@ function saveCurrentSession() {
     updatedAt: now,
     brand: idx >= 0 ? sessions[idx].brand : brandName,
     products: state.products.map(serializeProduct),
+    ownerId: currentUser ? currentUser.id : null,
+    ownerEmail: currentUser ? currentUser.email : "",
+    initials: currentUser ? initialsFromEmail(currentUser.email) : ""
   };
   if (idx >= 0) sessions[idx] = entry; else sessions.push(entry);
   persistSessions(sessions);
+  cloudUpsertSession(entry);   // *** NY *** (v5.3) gem egen session i skyen
+  enforceOwnSessionCap();      // *** NY *** (v5.3) cap 20/bruger
 }
 // Debounced autosave — kaldes fra renderResults så alle ændringer fanges ét sted.
 let _autosaveTimer = null;
@@ -1590,10 +1678,13 @@ function renderSessionsList() {
     }
     const mpns = (s.products || []).map(p => p.mpn || p.gtin || "?");
     const chips = mpns.map(m => `<span class="chip">${escapeHtml(m)}</span>`).join("");
+    const isOwn = currentUser && s.ownerId === currentUser.id;
+    const ownerTag = s.initials ? `<span class="sc-owner" title="${escapeHtml(s.ownerEmail || "")}">${escapeHtml(s.initials)}</span>` : "";
     return `<div class="session-card">
       <div class="sc-top">
         <span class="sc-date">${escapeHtml(dateStr)}${editedStr}</span>
         <span class="sc-meta">
+          ${ownerTag}
           ${s.brand ? `<span class="sc-brand">Profil: ${escapeHtml(s.brand)}</span>` : ""}
           <span class="sc-count">${mpns.length} produkt${mpns.length === 1 ? "" : "er"}</span>
         </span>
@@ -1601,7 +1692,7 @@ function renderSessionsList() {
       <div class="sc-mpns">${chips}</div>
       <div class="sc-actions">
         <button class="accent load" onclick="loadSession('${s.id}')">Hent frem</button>
-        <button class="ghost" onclick="deleteSession('${s.id}')">Slet</button>
+        ${isOwn ? `<button class="ghost" onclick="deleteSession('${s.id}')">Slet</button>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -1611,7 +1702,8 @@ window.loadSession = (id) => {
   const s = loadSessions().find(x => x.id === id);
   if (!s) return;
   state.products = (s.products || []).map(p => ({ ...p, _open: false }));
-  state.currentSessionId = s.id;
+  // *** NY *** (v5.3) Egne sessioner kan redigeres/gemmes videre; andres åbnes som visning.
+  state.currentSessionId = (currentUser && s.ownerId === currentUser.id) ? s.id : null;
   closeSessionsModal();
   $("#results-card").style.display = "block";
   renderResults();
@@ -1619,8 +1711,11 @@ window.loadSession = (id) => {
 };
 
 window.deleteSession = (id) => {
-  const sessions = loadSessions().filter(s => s.id !== id);
-  persistSessions(sessions);
+  const sessions = loadSessions();
+  const s = sessions.find(x => x.id === id);
+  if (s && currentUser && s.ownerId && s.ownerId !== currentUser.id) return; // kun egne
+  persistSessions(sessions.filter(x => x.id !== id));
+  cloudDeleteSession(id); // *** NY *** (v5.3) slet i skyen
   if (state.currentSessionId === id) state.currentSessionId = null;
   renderSessionsList();
 };
@@ -3577,6 +3672,7 @@ async function showApp() {
     appInitDone = true;
     await loadBrandsFromCloud(); // *** NY *** (v5.1) fyld brand-cache + auto-lift FØR init
     await loadSettingsFromCloud(); // *** NY *** (v5.2) hent delte indstillinger FØR init
+    await loadSessionsFromCloud(); // *** NY *** (v5.3) hent delte sessioner FØR init
     init();
   }
 }
