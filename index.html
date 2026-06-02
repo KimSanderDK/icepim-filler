@@ -379,6 +379,23 @@ details.settings-advanced[open] > summary { border-color: var(--accent); margin-
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px;
 }
 .session-card .sc-count { color: var(--ink-muted); font-size: 12px; }
+/* *** NY *** (v5.6) Feature ikon-vælger + ikon-editor */
+.feature-icon-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.feature-icon-preview { width: 30px; height: 30px; object-fit: contain; border: 1px solid var(--line); border-radius: 5px; background: #fff; padding: 2px; }
+.feature-icon-none { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-muted); border: 1px dashed var(--line); border-radius: 5px; }
+.feature-icon-select { font-size: 12px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; font-family: inherit; }
+.feature-icon-warn { font-size: 11px; color: #b45309; }
+.icon-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
+.icon-row-img { width: 40px; height: 40px; object-fit: contain; flex: none; background: #fff; border: 1px solid var(--line); border-radius: 5px; padding: 2px; }
+.icon-row-main { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.icon-row-id { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; color: var(--ink); }
+.icon-row-meaning, .icon-row-url { font-size: 12px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; font-family: inherit; }
+.icon-add { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--line-soft); }
+.icon-add-head { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.icon-add-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.icon-add-row input { flex: 1; font-size: 13px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font-family: inherit; }
+.icon-add-preview { width: 34px; height: 34px; object-fit: contain; flex: none; border: 1px solid var(--line); border-radius: 5px; background: #fff; padding: 2px; }
+.icon-list-head { font-size: 12px; color: var(--ink-muted); margin: 10px 0 8px; }
 .session-card .sc-owner {
   background: var(--ink); color: #fff; font-size: 10px; font-weight: 700;
   letter-spacing: 0.3px; padding: 2px 7px; border-radius: 99px;
@@ -953,6 +970,7 @@ pre.raw {
     <button class="ghost" id="clear-results">Ryd resultater</button>
     <button class="ghost" id="sessions-btn">📂 Tidligere sessioner</button>
     <button class="ghost" id="brands-btn">⚙ Brand-profiler</button>
+    <button class="ghost" id="icons-btn">⚙ Ikon-bibliotek</button>
   </div>
 
   <div class="progress" id="progress-bar-wrap" style="display:none;">
@@ -969,6 +987,18 @@ pre.raw {
       <button class="ghost" id="brands-close">Luk</button>
     </div>
     <div id="brands-content"></div>
+  </div>
+</div>
+
+<!-- IKON-BIBLIOTEK (editor) -->
+<div id="icons-overlay" class="sessions-overlay" style="display:none;">
+  <div class="sessions-modal">
+    <div class="sessions-modal-head">
+      <h2>Ikon-bibliotek</h2>
+      <button class="ghost" id="icons-close">Luk</button>
+    </div>
+    <p class="sessions-sub">Ikoner hostes i Shopify Files. Her registrerer du id, betydning og URL — delt med alle. Modellen vælger ikon ud fra betydnings-teksten, så skriv gerne nøgleord (fx "4K UHD resolution").</p>
+    <div id="icons-content"></div>
   </div>
 </div>
 
@@ -1020,12 +1050,12 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.5.0";
+const APP_VERSION = "5.6.0";
 const APP_BUILD = "2026-06-02";
-// 5.5.0: IKON-BIBLIOTEK trin 1 — delt tabel icepim_icons (id, betydning, URL), læst ved
-//   login. Modellen vælger ét matchende ikon-id pr. feature (nyt 'icon'-felt i skemaet +
-//   ikon-liste injiceret i prompten). buildDescriptionHtml slår id op: bibliotek-ikon →
-//   feature-billede → test-ikon. Editor til at tilføje ikoner kommer i v5.6.
+// 5.6.0: IKON-BIBLIOTEK trin 2 — (1) ikon-editor (⚙ Ikon-bibliotek): tilføj/rediger/slet
+//   ikoner med live-preview og bulk-tilføjelse, delt via skyen. (2) Ikon-vælger pr.
+//   feature: viser model-valgt ikon + lader dig overskrive det (eller vælge intet).
+// 5.5.0: IKON-BIBLIOTEK trin 1 — tabel + model-valg.
 // 5.4.0: ONLINE-MIGRATION trin 5 — cloud-status-prik.
 // 5.3.0: ONLINE-MIGRATION trin 4 — delte sessioner.
 // 5.2.0: ONLINE-MIGRATION trin 3 — delte indstillinger.
@@ -1405,6 +1435,26 @@ async function loadIconsFromCloud() {
     _iconsCache = obj;
   } catch (e) { console.warn("Sky: fejl ved hentning af ikoner:", e); }
 }
+async function cloudUpsertIcon(id, meaning, url) {
+  if (!_iconsCache) _iconsCache = {};
+  _iconsCache[id] = { meaning: meaning || "", url: url || "" };
+  if (!supa) return;
+  try {
+    const { error } = await _cloud(() => supa.from("icepim_icons").upsert({
+      icon_id: id, meaning: meaning || "", url: url || "",
+      last_user_email: currentUser ? currentUser.email : null
+    }));
+    if (error) console.warn("Sky: kunne ikke gemme ikon '" + id + "':", error.message);
+  } catch (e) { console.warn("Sky: fejl ved gem af ikon:", e); }
+}
+async function cloudDeleteIcon(id) {
+  if (_iconsCache) delete _iconsCache[id];
+  if (!supa) return;
+  try {
+    const { error } = await _cloud(() => supa.from("icepim_icons").delete().eq("icon_id", id));
+    if (error) console.warn("Sky: kunne ikke slette ikon '" + id + "':", error.message);
+  } catch (e) { console.warn("Sky: fejl ved sletning af ikon:", e); }
+}
 
 async function loadBrandsFromCloud() {
   if (!supa) return;
@@ -1777,6 +1827,87 @@ let _brandEditKey = null; // null = liste-visning; "" = ny; ellers = redigerer n
 
 window.openBrandsModal = () => { _brandEditKey = null; renderBrandsModal(); $("#brands-overlay").style.display = "flex"; };
 window.closeBrandsModal = () => { $("#brands-overlay").style.display = "none"; };
+
+// *** NY *** (v5.6) Ikon-bibliotek editor.
+window.openIconsModal = () => { renderIconsModal(); $("#icons-overlay").style.display = "flex"; };
+window.closeIconsModal = () => { $("#icons-overlay").style.display = "none"; };
+function renderIconsModal() {
+  const lib = getIcons();
+  const ids = Object.keys(lib).sort();
+  const rows = ids.map(id => {
+    const it = lib[id];
+    return `<div class="icon-row">
+      <img class="icon-row-img" src="${escapeHtml(it.url)}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="icon-row-main">
+        <div class="icon-row-id">${escapeHtml(id)}</div>
+        <input class="icon-row-meaning" type="text" value="${escapeHtml(it.meaning)}" placeholder="betydning / nøgleord" onchange="saveIcon('${escapeHtml(id)}', this.value, null)">
+        <input class="icon-row-url" type="text" value="${escapeHtml(it.url)}" placeholder="Shopify-URL" onchange="saveIcon('${escapeHtml(id)}', null, this.value)">
+      </div>
+      <button class="small ghost" onclick="removeIcon('${escapeHtml(id)}')" title="slet ikon">×</button>
+    </div>`;
+  }).join("");
+  $("#icons-content").innerHTML = `
+    <div class="icon-add">
+      <div class="icon-add-head">Tilføj ikon</div>
+      <div class="icon-add-row">
+        <input id="new-icon-id" type="text" placeholder="id (fx 4k-display)">
+        <input id="new-icon-meaning" type="text" placeholder="betydning / nøgleord (fx 4K UHD resolution)">
+      </div>
+      <div class="icon-add-row">
+        <input id="new-icon-url" type="text" placeholder="Shopify-URL (…/files/4k-display.png?v=…)" oninput="iconPreview()">
+        <img id="new-icon-preview" class="icon-add-preview" alt="" style="visibility:hidden">
+        <button class="accent" onclick="addIcon()">Tilføj</button>
+      </div>
+    </div>
+    <details class="settings-advanced" style="margin:14px 0;">
+      <summary>Bulk-tilføj (én pr. linje: id | betydning | url)</summary>
+      <div>
+        <textarea id="bulk-icons" rows="5" placeholder="4k-display | 4K UHD resolution | https://cdn.shopify.com/.../4k-display.png?v=…
+wifi | Wi-Fi wireless networking | https://cdn.shopify.com/.../wifi.png?v=…"></textarea>
+        <div class="actions" style="margin-top:8px;"><button class="small accent" onclick="bulkAddIcons()">Tilføj alle linjer</button></div>
+      </div>
+    </details>
+    <div class="icon-list-head">${ids.length} ikon${ids.length === 1 ? "" : "er"} i biblioteket</div>
+    <div class="icon-list">${rows || '<div class="muted">Ingen ikoner endnu.</div>'}</div>`;
+}
+window.iconPreview = () => {
+  const u = ($("#new-icon-url").value || "").trim();
+  const img = $("#new-icon-preview");
+  if (u) { img.src = u; img.style.visibility = "visible"; img.onerror = () => { img.style.visibility = "hidden"; }; }
+  else { img.style.visibility = "hidden"; }
+};
+window.addIcon = () => {
+  const id = ($("#new-icon-id").value || "").trim();
+  const meaning = ($("#new-icon-meaning").value || "").trim();
+  const url = ($("#new-icon-url").value || "").trim();
+  if (!id || !url) { alert("Udfyld mindst id og URL."); return; }
+  cloudUpsertIcon(id, meaning, url);
+  renderIconsModal();
+  renderResults();
+};
+window.saveIcon = (id, meaning, url) => {
+  const cur = getIcons()[id] || { meaning: "", url: "" };
+  cloudUpsertIcon(id, meaning === null ? cur.meaning : meaning, url === null ? cur.url : url);
+  renderResults();
+};
+window.removeIcon = (id) => {
+  if (!confirm(`Slet ikonet '${id}' fra biblioteket? (Billedet i Shopify røres ikke.)`)) return;
+  cloudDeleteIcon(id);
+  renderIconsModal();
+  renderResults();
+};
+window.bulkAddIcons = () => {
+  const lines = ($("#bulk-icons").value || "").split("\n").map(l => l.trim()).filter(Boolean);
+  let n = 0;
+  for (const line of lines) {
+    const parts = line.split("|").map(s => s.trim());
+    const id = parts[0], meaning = parts[1] || "", url = parts[2] || "";
+    if (id && url) { cloudUpsertIcon(id, meaning, url); n++; }
+  }
+  renderIconsModal();
+  renderResults();
+  alert(`${n} ikon(er) tilføjet.`);
+};
 
 function renderBrandsModal() {
   if (_brandEditKey === null) renderBrandsList();
@@ -2706,6 +2837,19 @@ function renderResultBody(p, i) {
         return `<div class="feature-item">
         <input type="text" class="feature-title" value="${escapeHtml(sec.title || "")}" placeholder="Feature title" onchange="updateFeatureField(${i}, ${j}, 'title', this.value)">
         <textarea class="feature-desc" rows="2" placeholder="Feature description" onchange="updateFeatureField(${i}, ${j}, 'description', this.value)">${escapeHtml(sec.description || "")}</textarea>
+        ${(() => {
+          const _lib = getIcons(); const _ids = Object.keys(_lib).sort();
+          const _sel = sec.icon || "";
+          const _url = (_sel && _lib[_sel]) ? _lib[_sel].url : "";
+          const _opts = `<option value="">(intet ikon)</option>` + _ids.map(id => `<option value="${escapeHtml(id)}"${id === _sel ? " selected" : ""}>${escapeHtml(id)}</option>`).join("");
+          const _missing = _sel && !_lib[_sel];
+          return `<div class="feature-icon-row">
+            <span class="muted" style="font-size:12px;">Ikon (model-valgt — kan rettes):</span>
+            ${_url ? `<img class="feature-icon-preview" src="${escapeHtml(_url)}" alt="" onerror="this.style.display='none'">` : `<span class="feature-icon-none">—</span>`}
+            <select class="feature-icon-select" onchange="updateFeatureField(${i}, ${j}, 'icon', this.value)">${_opts}</select>
+            ${_missing ? `<span class="feature-icon-warn">⚠ '${escapeHtml(_sel)}' ikke i bibliotek</span>` : ""}
+          </div>`;
+        })()}
         <div class="feature-img-row">
           ${curImg ? `<img class="feature-img-preview" src="${escapeHtml(normalizeImageUrl(curImg))}" alt="" onerror="this.style.display='none'">` : ""}
           <input type="text" class="feature-img" value="${escapeHtml(sec.image_url || "")}" placeholder="Billed-URL til denne feature (valgfri)" onchange="updateFeatureField(${i}, ${j}, 'image_url', this.value)">
@@ -3694,6 +3838,9 @@ function init() {
   // *** NY *** (4.6.0) Brand-editor: anvend gemte profiler + wire knapper.
   rebuildBrands();
   $("#brands-btn").addEventListener("click", openBrandsModal);
+  $("#icons-btn").addEventListener("click", openIconsModal); // *** NY *** (v5.6)
+  $("#icons-close").addEventListener("click", closeIconsModal);
+  $("#icons-overlay").addEventListener("click", (e) => { if (e.target.id === "icons-overlay") closeIconsModal(); });
   $("#add-brand-btn").addEventListener("click", openBrandsModal); // *** NY *** (4.9.1)
   $("#brands-close").addEventListener("click", closeBrandsModal);
   $("#brands-overlay").addEventListener("click", (e) => { if (e.target.id === "brands-overlay") closeBrandsModal(); });
