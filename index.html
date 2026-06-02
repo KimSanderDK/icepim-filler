@@ -1020,11 +1020,13 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.4.0";
-const APP_BUILD = "2026-06-01";
-// 5.4.0: ONLINE-MIGRATION trin 5 (sidste) — cloud-status-prik i headeren: grøn=synket,
-//   gul=gemmer, rød=fejl. Alle sky-kald går nu gennem _cloud()-wrapper der tæller
-//   igangværende skrivninger og fanger fejl. Online-migrationen er komplet.
+const APP_VERSION = "5.5.0";
+const APP_BUILD = "2026-06-02";
+// 5.5.0: IKON-BIBLIOTEK trin 1 — delt tabel icepim_icons (id, betydning, URL), læst ved
+//   login. Modellen vælger ét matchende ikon-id pr. feature (nyt 'icon'-felt i skemaet +
+//   ikon-liste injiceret i prompten). buildDescriptionHtml slår id op: bibliotek-ikon →
+//   feature-billede → test-ikon. Editor til at tilføje ikoner kommer i v5.6.
+// 5.4.0: ONLINE-MIGRATION trin 5 — cloud-status-prik.
 // 5.3.0: ONLINE-MIGRATION trin 4 — delte sessioner.
 // 5.2.0: ONLINE-MIGRATION trin 3 — delte indstillinger.
 // 5.1.1: Auto-lift kun engangs (flag) — slettede profiler genoplives ikke.
@@ -1253,7 +1255,7 @@ const SUBMIT_PRODUCT_TOOL = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["title", "description", "image_url"],
+          required: ["title", "description", "image_url", "icon"],
           properties: {
             title: {
               type: "string",
@@ -1267,6 +1269,10 @@ const SUBMIT_PRODUCT_TOOL = {
             image_url: {
               type: "string",
               description: "DIRECT URL to the image on the product page that best ILLUSTRATES this specific feature (e.g. a feature graphic with relevant text/icon). Manufacturer pages often have a dedicated illustration per feature — pick the one whose subject matches this feature's title. Empty string if no clearly matching image — NEVER pair an unrelated image (like a dimensions drawing or a generic product shot) with a feature."
+            },
+            icon: {
+              type: "string",
+              description: "Identifier of the ONE icon from the AVAILABLE ICONS list (provided in the user message) that best matches this feature — copied EXACTLY (e.g. 'wifi', '4k-display'). Pick an icon only when it genuinely matches the feature's subject; return an empty string if none of the available icons fits. NEVER invent an id that is not in the list. If the AVAILABLE ICONS list is absent, always return an empty string."
             }
           }
         }
@@ -1386,6 +1392,20 @@ function saveCustomBrands(obj) {
 
 // Fyld brand-cache fra skyen ved login. Auto-lift: hvis skyen er tom OG der ligger
 // egne profiler lokalt, løftes de op (engangs-migration). Kaldes FØR init().
+// *** NY *** (v5.5) Ikon-bibliotek (icepim_icons): delt, læst ved login.
+let _iconsCache = null; // { icon_id: { meaning, url } }
+function getIcons() { return _iconsCache || {}; }
+async function loadIconsFromCloud() {
+  if (!supa) return;
+  try {
+    const { data, error } = await _cloud(() => supa.from("icepim_icons").select("icon_id, meaning, url"));
+    if (error) { console.warn("Sky: kunne ikke hente ikoner:", error.message); return; }
+    const obj = {};
+    (data || []).forEach(r => { if (r && r.icon_id) obj[r.icon_id] = { meaning: r.meaning || "", url: r.url || "" }; });
+    _iconsCache = obj;
+  } catch (e) { console.warn("Sky: fejl ved hentning af ikoner:", e); }
+}
+
 async function loadBrandsFromCloud() {
   if (!supa) return;
   try {
@@ -2138,6 +2158,14 @@ function buildUserContent(product, pdfData) {
   txt += `- detected_brand: angiv det brand du FAKTISK aflæste på kilden (tom streng hvis intet brand kunne aflæses tydeligt). Skriv kun hvad kilden siger — kopiér aldrig det forventede brand herind medmindre kilden bekræfter det.\n`;
   txt += `- product_found: sæt true KUN hvis du med rimelig sikkerhed fandt det specifikke produkt (matchende GTIN/MPN) på en troværdig kilde. Hvis ikke, sæt false og returnér tomme felter frem for at udlede data ud fra det forventede brand.\n`;
   txt += `- BILLEDER ved uvished: hvis product_found er false, eller hvis det brand du aflæste IKKE matcher det forventede brand, så returnér en TOM image_urls-liste. Vedhæft ALDRIG billeder af et andet produkt — heller ikke et andet produkt fra det forventede brand. Forkerte billeder er lige så vildledende som opdigtet tekst.\n\n`;
+  // *** NY *** (v5.5) Tilgængelige ikoner — modellen vælger ét matchende id pr. feature.
+  const _icons = getIcons();
+  const _iconIds = Object.keys(_icons);
+  if (_iconIds.length) {
+    txt += `AVAILABLE ICONS — for each feature_section, set its "icon" to the ONE id below whose meaning best matches the feature, or "" if none fits. Use the id EXACTLY as written:\n`;
+    _iconIds.forEach(id => { txt += `- ${id}: ${_icons[id].meaning}\n`; });
+    txt += `\n`;
+  }
   txt += "Find produktet og lever de berigede data ved at kalde submit_product_data-tool'et.";
   parts.push({ type: "text", text: txt });
   return parts;
@@ -3474,8 +3502,12 @@ function buildDescriptionHtml(data, imgs) {
   // størrelse). Features uden eget billede bruger test-ikonet hvis sat. Ellers afsnit.
   if (sections.length > 0) {
     const testIcon = ($("#test-icon-url") && $("#test-icon-url").value || "").trim();
+    const iconLib = getIcons(); // *** NY *** (v5.5) model-valgte ikoner fra biblioteket
     sections.forEach((sec) => {
-      let secImg = (sec.image_url && sec.image_url.trim()) ? normalizeImageUrl(sec.image_url.trim()) : "";
+      // Rækkefølge: bibliotek-ikon (model-valgt) → feature-billede → test-ikon.
+      let secImg = "";
+      if (sec.icon && iconLib[sec.icon] && iconLib[sec.icon].url) secImg = iconLib[sec.icon].url;
+      if (!secImg && sec.image_url && sec.image_url.trim()) secImg = normalizeImageUrl(sec.image_url.trim());
       if (!secImg && testIcon) secImg = testIcon; // midlertidigt test-ikon
       const titleHtml = escapeHtml(sec.title);
       const descHtml = escapeHtml(sec.description);
@@ -3703,6 +3735,7 @@ async function showApp() {
     await loadBrandsFromCloud(); // *** NY *** (v5.1) fyld brand-cache + auto-lift FØR init
     await loadSettingsFromCloud(); // *** NY *** (v5.2) hent delte indstillinger FØR init
     await loadSessionsFromCloud(); // *** NY *** (v5.3) hent delte sessioner FØR init
+    await loadIconsFromCloud(); // *** NY *** (v5.5) hent ikon-bibliotek FØR init
     init();
   }
 }
