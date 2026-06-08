@@ -1050,8 +1050,10 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.6.0";
-const APP_BUILD = "2026-06-02";
+const APP_VERSION = "5.6.1";
+const APP_BUILD = "2026-06-03";
+// 5.6.1: Short summary-grænse hævet fra 160 til 190 tegn (schema, validering, label,
+//   textarea, trunkering).
 // 5.6.0: IKON-BIBLIOTEK trin 2 — (1) ikon-editor (⚙ Ikon-bibliotek): tilføj/rediger/slet
 //   ikoner med live-preview og bulk-tilføjelse, delt via skyen. (2) Ikon-vælger pr.
 //   feature: viser model-valgt ikon + lader dig overskrive det (eller vælge intet).
@@ -1270,8 +1272,8 @@ const SUBMIT_PRODUCT_TOOL = {
       },
       short_summary_description: {
         type: "string",
-        maxLength: 160,
-        description: "Standalone summary, maximum 160 characters (hard limit enforced). One complete sentence that quickly tells the reader what the product IS. May be technical and include the most defining specs (screen size, type, key function). MUST be a complete sentence that can stand alone — and MUST NOT just repeat the model name or tagline. GOOD examples: 'Compact 4K digital signage player with dual HDMI outputs and built-in HTML5 engine for 24/7 retail and corporate displays.' / '32-inch Full HD IPS commercial display rated for 24/7 operation with 500 nits brightness and integrated Android 11.' / 'Mobile floor cart designed exclusively for the Hisense HAIO136 136-inch LED All-in-One display, with cable management and silent universal casters.' BAD: 'Hisense LGT60401D Mobile Cart' (just the name) or 'Professional 4K signage display' (that is already the tagline)."
+        maxLength: 190,
+        description: "Standalone summary, maximum 190 characters (hard limit enforced). One complete sentence that quickly tells the reader what the product IS. May be technical and include the most defining specs (screen size, type, key function). MUST be a complete sentence that can stand alone — and MUST NOT just repeat the model name or tagline. GOOD examples: 'Compact 4K digital signage player with dual HDMI outputs and built-in HTML5 engine for 24/7 retail and corporate displays.' / '32-inch Full HD IPS commercial display rated for 24/7 operation with 500 nits brightness and integrated Android 11.' / 'Mobile floor cart designed exclusively for the Hisense HAIO136 136-inch LED All-in-One display, with cable management and silent universal casters.' BAD: 'Hisense LGT60401D Mobile Cart' (just the name) or 'Professional 4K signage display' (that is already the tagline)."
       },
       product_long_description: {
         type: "string",
@@ -2598,7 +2600,7 @@ function detectIssues(p) {
   if (!d.product_name || !d.product_name.trim()) issues.push("mangler produktnavn");
   const summary = (d.short_summary_description || "").trim();
   if (!summary) issues.push("mangler short summary description");
-  else if (summary.length > 160) issues.push(`short summary er ${summary.length} tegn (max 160 — trunkeres ved eksport)`);
+  else if (summary.length > 190) issues.push(`short summary er ${summary.length} tegn (max 190 — trunkeres ved eksport)`);
   const desc = d.product_long_description || "";
   if (!desc.trim()) issues.push("mangler beskrivelse");
   else if (desc.length < 100) issues.push(`meget kort beskrivelse (${desc.length} tegn)`);
@@ -2821,8 +2823,8 @@ function renderResultBody(p, i) {
   </div>
 
   <div class="field">
-    <label>Short summary description (${(d.short_summary_description || "").length}/160 tegn — selvstændig opsummering, gerne teknisk)</label>
-    <textarea rows="2" maxlength="160" placeholder="fx '32-inch Full HD IPS commercial display rated for 24/7 operation with 500 nits brightness and Android 11.'" onchange="updateField(${i}, 'short_summary_description', this.value)">${escapeHtml(d.short_summary_description || "")}</textarea>
+    <label>Short summary description (${(d.short_summary_description || "").length}/190 tegn — selvstændig opsummering, gerne teknisk)</label>
+    <textarea rows="2" maxlength="190" placeholder="fx '32-inch Full HD IPS commercial display rated for 24/7 operation with 500 nits brightness and Android 11.'" onchange="updateField(${i}, 'short_summary_description', this.value)">${escapeHtml(d.short_summary_description || "")}</textarea>
   </div>
 
   ${collapsibleSection(i, 'desc', 'Intro-beskrivelse', `${(d.product_long_description || "").length} tegn`, sec.desc,
@@ -3593,9 +3595,9 @@ function buildRow(p, brandCfg) {
     else if (key === "product name") row[h] = d.product_name || "";
     else if (key === "product ean/upc code") row[h] = effectiveGtin;
     else if (key === "short summary description") {
-      // Hård grænse på 160 tegn — trunkér defensivt hvis modellen overskrider
+      // Hård grænse på 190 tegn — trunkér defensivt hvis modellen overskrider
       const s = (d.short_summary_description || "").trim();
-      row[h] = s.length > 160 ? s.slice(0, 157).trimEnd() + "..." : s;
+      row[h] = s.length > 190 ? s.slice(0, 187).trimEnd() + "..." : s;
     }
     else if (key === "product long description") row[h] = description;
     else if (key.startsWith("image url")) {
