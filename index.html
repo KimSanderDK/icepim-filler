@@ -500,6 +500,12 @@ details.settings-advanced[open] > summary { border-color: var(--accent); margin-
 .tpl-head { font-size:11px; color:var(--muted); margin:6px 0 4px; padding:0 2px; }
 .tpl-row { margin-bottom:6px; }
 .tpl-row input, .tpl-row select { width:100%; font-size:13px; padding:5px 7px; }
+/* *** NY *** (5.10.0) Varelinje key-features kontrol-række */
+.kf-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
+.kf-controls select { font-size:13px; padding:4px 6px; }
+.kf-toggle { font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer; }
+.kf-ctl-lbl { font-size:12px; color:var(--muted); }
+.kf-ctl-sep { width:1px; height:18px; background:var(--line); }
 .results-filter-note { font-size: 12px; color: var(--ink-faint); margin-bottom: 10px; }
 /* *** NY *** (4.5.0) Foldbare sektioner inde i et produkt — bevidst dæmpede så
    de læses som under-elementer, ikke som selvstændige kort på linje med produktet */
@@ -1075,8 +1081,12 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.9.0";
+const APP_VERSION = "5.10.0";
 const APP_BUILD = "2026-06-03";
+// 5.10.0: HEADER-SKABELONER (trin 3) — varelinje-styring: vis/skjul header pr. produkt
+//   (override af brandets default), vælg alternativ skabelon pr. produkt, og "Søg igen
+//   (kun header)" der via et fokuseret kald KUN henter key_features for den valgte
+//   skabelon. Skabelon-skift rydder de gamle værdier. Mønster som det fokuserede billed-kald.
 // 5.9.0: HEADER-SKABELONER (trin 2) — key_features er nu en generisk liste styret af
 //   brandets aktive skabelon. Dynamisk prompt (NØGLE-SPEC-FELTER injiceres pr. søgning),
 //   generator + varekort-editor følger skabelonens felter, ikoner fra biblioteket.
@@ -1411,6 +1421,35 @@ const SUBMIT_IMAGES_TOOL = {
         type: "array",
         items: { type: "string" },
         description: "Every DISTINCT product image URL you found, copied VERBATIM from HTML you fetched via web_fetch. For each image prefer the LARGEST/highest-resolution version (avoid 300px thumbnails when a bigger version exists on the page). Include product shots from multiple angles, dimension drawings and feature graphics. Skip logos, navigation icons, flags and social buttons. NEVER fabricate or modify URLs."
+      }
+    }
+  }
+};
+
+// *** NY *** (5.10.0) Fokuseret tool til header-kun re-søgning på varelinje-niveau.
+const SUBMIT_KEY_FEATURES_TOOL = {
+  name: "submit_key_features",
+  description: "Submit the key-feature values you found for the requested fields. Fill ONE entry per field in the NØGLE-SPEC-FELTER list, using the field id EXACTLY.",
+  input_schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["key_features"],
+    properties: {
+      key_features: {
+        type: "array",
+        minItems: 0,
+        maxItems: 5,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "value"],
+          properties: {
+            id: { type: "string", description: "The field id, copied EXACTLY from the NØGLE-SPEC-FELTER list." },
+            value: { type: "string", description: "Short display value incl. unit, e.g. '500 nits' or '9 / 3.1 / 16 mm'. Empty string if not found with reasonable confidence." },
+            caption: { type: "string", description: "Short context, 1-3 words. For per-side measurements, the side labels matching value in the SAME order (e.g. 'Top / sides / bottom', 'Left / right'). Empty if unclear — never guess." },
+            uncertain: { type: "boolean", description: "true if a value is provided but not certain for this exact model." }
+          }
+        }
       }
     }
   }
@@ -2581,6 +2620,43 @@ async function fetchProductImages({ apiKey, model, headers, maxSearches, maxFetc
   return block.input.image_urls.filter(u => u && u.trim());
 }
 
+// *** NY *** (5.10.0) Header-kun re-søgning på varelinje-niveau: ét fokuseret kald der
+// KUN henter key_features for den valgte skabelons felter. Mønster som fetchProductImages.
+async function fetchKeyFeaturesOnly({ apiKey, model, headers, maxSearches, maxFetches, brandName, productName, mpn, gtin, fields }) {
+  const lines = [];
+  lines.push("Din ENESTE opgave er at finde nøgle-specifikationer for dette produkt — IKKE noget andet.");
+  if (brandName) lines.push(`Brand: ${brandName}`);
+  if (productName) lines.push(`Produkt: ${productName}`);
+  if (mpn) lines.push(`MPN: ${mpn}`);
+  if (gtin) lines.push(`GTIN/EAN: ${gtin}`);
+  lines.push("");
+  lines.push("NØGLE-SPEC-FELTER — find værdien for HVERT felt og returnér én post i key_features (brug id'et EKSAKT):");
+  (fields || []).forEach(f => lines.push(`- ${f.id}: ${f.label}`));
+  lines.push("");
+  lines.push("Brug det officielle datablad som primær kilde (web_search + web_fetch). For hvert felt: value = kort visningsværdi inkl. enhed (eller tom streng hvis ikke fundet med rimelig sikkerhed — gæt ALDRIG); caption = kort kontekst (1-3 ord; for mål der varierer pr. side, fx ramme-bredde, den KORREKTE side-tekst der matcher value i SAMME rækkefølge, fx 'Top / sides / bottom' eller 'Left / right' — gæt ALDRIG sider, lad caption være tom hvis uklart); uncertain=true hvis du gav en værdi men ikke er sikker på den passer til netop denne model. Kald submit_key_features med listen.");
+
+  const body = {
+    model,
+    max_tokens: 2048,
+    system: "Du er en spec-research-assistent. Du finder præcise nøgle-specifikationer fra officielle datablade. Du gætter eller fabrikerer aldrig værdier.",
+    tools: [
+      { type: "web_search_20250305", name: "web_search", max_uses: maxSearches },
+      { type: "web_fetch_20250910", name: "web_fetch", max_uses: maxFetches },
+      SUBMIT_KEY_FEATURES_TOOL,
+    ],
+    messages: [{ role: "user", content: lines.join("\n") }],
+  };
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers, body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`header-kald API ${resp.status}`);
+  const data = await resp.json();
+  const block = (data.content || []).find(b => b.type === "tool_use" && b.name === "submit_key_features");
+  if (!block || !block.input || !Array.isArray(block.input.key_features)) return [];
+  return block.input.key_features.filter(e => e && e.id);
+}
+
 // *** NY *** (4.0.0 lev.2) Hjælpere til manuel billed-udvej.
 function apiHeaders(apiKey) {
   return {
@@ -3073,10 +3149,28 @@ function renderResultBody(p, i) {
 
   ${(() => {
     const _bc = BRANDS[$("#brand") && $("#brand").value];
-    const _tpl = _bc && _bc.kf_template ? getTemplates()[_bc.kf_template] : null;
-    const _fields = _tpl && Array.isArray(_tpl.fields) ? _tpl.fields : [];
-    if (!_fields.length) return "";
-    return collapsibleSection(i, 'keyfeat', 'Nøgle-specifikationer (header)', `${_fields.length} felt${_fields.length === 1 ? "" : "er"} · skabelon: ${escapeHtml(_tpl.name || "")}`, sec.keyfeat, renderKeyFeaturesEditor(i, d, _fields));
+    const _brandTplId = _bc && _bc.kf_template ? _bc.kf_template : "";
+    const _all = getTemplates();
+    if (!_brandTplId && !p.kfTemplate) return ""; // intet relevant brand/produkt-valg
+    const _effId = p.kfTemplate || _brandTplId;
+    const _effTpl = _effId ? _all[_effId] : null;
+    const _fields = _effTpl && Array.isArray(_effTpl.fields) ? _effTpl.fields : [];
+    const _on = (typeof p.kfHeader === "boolean") ? p.kfHeader : !!(_bc && _bc.kf_default_on);
+    const _ids = Object.keys(_all).sort((a, c) => (_all[a].name || a).localeCompare(_all[c].name || c));
+    const _brandName = (_brandTplId && _all[_brandTplId]) ? _all[_brandTplId].name : "(ingen)";
+    const _opts = `<option value="">Brandets standard (${escapeHtml(_brandName)})</option>` +
+      _ids.map(id => `<option value="${escapeHtml(id)}"${p.kfTemplate === id ? " selected" : ""}>${escapeHtml(_all[id].name || id)}</option>`).join("");
+    const _busy = !!p._kfBusy;
+    const _controls = `<div class="kf-controls">
+      <label class="kf-toggle"><input type="checkbox" ${_on ? "checked" : ""} onchange="setProductKfHeader(${i}, this.checked)"> Vis header i eksport</label>
+      <span class="kf-ctl-sep"></span>
+      <label class="kf-ctl-lbl">Skabelon</label>
+      <select onchange="setProductKfTemplate(${i}, this.value)">${_opts}</select>
+      <button class="small ghost" ${_busy ? "disabled" : ""} onclick="rerunKeyFeatures(${i})">${_busy ? "Søger…" : "Søg igen (kun header)"}</button>
+    </div>`;
+    const _editor = _fields.length ? renderKeyFeaturesEditor(i, d, _fields) : `<p class="muted" style="font-size:12px;">Vælg en skabelon med felter ovenfor.</p>`;
+    const _meta = `${_fields.length} felt${_fields.length === 1 ? "" : "er"} · ${escapeHtml((_effTpl && _effTpl.name) || "(ingen)")}${_on ? "" : " · skjult i eksport"}`;
+    return collapsibleSection(i, 'keyfeat', 'Nøgle-specifikationer (header)', _meta, sec.keyfeat, _controls + _editor);
   })()}
 
   ${collapsibleSection(i, 'desc', 'Intro-beskrivelse', `${(d.product_long_description || "").length} tegn`, sec.desc,
@@ -3397,6 +3491,55 @@ window.updateKeyFeature = (i, id, prop, val) => {
   e[prop] = val;
   p.issues = detectIssues(p);
   renderResults();
+};
+
+// *** NY *** (5.10.0) Varelinje: vis/skjul header (override af brandets default).
+window.setProductKfHeader = (i, checked) => {
+  state.products[i].kfHeader = !!checked;
+  renderResults();
+};
+// Varelinje: vælg alternativ skabelon ("" = brandets standard). Skift rydder de gamle
+// værdier, da felterne ikke længere matcher — kør "Søg igen (kun header)" bagefter.
+window.setProductKfTemplate = (i, val) => {
+  const p = state.products[i];
+  const bc = BRANDS[$("#brand") && $("#brand").value];
+  const brandTpl = (bc && bc.kf_template) || "";
+  const prevEff = p.kfTemplate || brandTpl;
+  const newEff = (val || "") || brandTpl;
+  if (val) p.kfTemplate = val; else delete p.kfTemplate;
+  if (newEff !== prevEff && p.data) p.data.key_features = [];
+  p.issues = detectIssues(p);
+  renderResults();
+};
+// Varelinje: header-kun re-søgning — henter KUN key_features for den aktive skabelon.
+window.rerunKeyFeatures = async (i) => {
+  const p = state.products[i];
+  const bc = BRANDS[$("#brand") && $("#brand").value];
+  const tplId = p.kfTemplate || (bc && bc.kf_template);
+  const tpl = tplId ? getTemplates()[tplId] : null;
+  const fields = tpl && Array.isArray(tpl.fields) ? tpl.fields : [];
+  if (!fields.length) { alert("Ingen skabelon med felter valgt for dette produkt."); return; }
+  const apiKey = ((localStorage.getItem(LS.apiKey) || "") || ($("#api-key") && $("#api-key").value) || "").trim();
+  if (!apiKey) { alert("Indtast API-nøgle først."); return; }
+  p._kfBusy = true; renderResults();
+  try {
+    const arr = await fetchKeyFeaturesOnly({
+      apiKey, model: $("#model").value, headers: apiHeaders(apiKey),
+      maxSearches: 5, maxFetches: 5,
+      brandName: p.selectedBrand || (bc && bc.brand_name) || "",
+      productName: (p.data && p.data.product_name) || "",
+      mpn: p.mpn || (p.data && p.data.mpn) || "",
+      gtin: p.gtin || (p.data && p.data.ean) || "",
+      fields
+    });
+    if (!p.data) p.data = {};
+    p.data.key_features = arr;
+    p.issues = detectIssues(p);
+  } catch (e) {
+    console.error(e); alert("Header-søgning fejlede: " + e.message);
+  } finally {
+    p._kfBusy = false; renderResults();
+  }
 };
 window.updateMpn = (i, val) => {
   state.products[i].mpn = val.trim();
