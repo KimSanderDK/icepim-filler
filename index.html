@@ -495,6 +495,11 @@ details.settings-advanced[open] > summary { border-color: var(--accent); margin-
 .kf-edit-label { font-size:12px; font-weight:600; color:#002856; }
 .kf-edit-unc { font-size:13px; color:var(--warn); white-space:nowrap; cursor:pointer; user-select:none; }
 .kf-edit-unc input { cursor:pointer; vertical-align:middle; }
+/* *** NY *** (5.8.0) Header-skabelon felt-rækker */
+.tpl-head, .tpl-row { display:grid; grid-template-columns:1.3fr 1fr 1fr 1.3fr; gap:6px; align-items:center; }
+.tpl-head { font-size:11px; color:var(--muted); margin:6px 0 4px; padding:0 2px; }
+.tpl-row { margin-bottom:6px; }
+.tpl-row input, .tpl-row select { width:100%; font-size:13px; padding:5px 7px; }
 .results-filter-note { font-size: 12px; color: var(--ink-faint); margin-bottom: 10px; }
 /* *** NY *** (4.5.0) Foldbare sektioner inde i et produkt — bevidst dæmpede så
    de læses som under-elementer, ikke som selvstændige kort på linje med produktet */
@@ -982,6 +987,7 @@ pre.raw {
     <button class="ghost" id="sessions-btn">📂 Tidligere sessioner</button>
     <button class="ghost" id="brands-btn">⚙ Brand-profiler</button>
     <button class="ghost" id="icons-btn">⚙ Ikon-bibliotek</button>
+    <button class="ghost" id="templates-btn">⚙ Header-skabeloner</button>
   </div>
 
   <div class="progress" id="progress-bar-wrap" style="display:none;">
@@ -1010,6 +1016,18 @@ pre.raw {
     </div>
     <p class="sessions-sub">Ikoner hostes i Shopify Files. Her registrerer du id, betydning og URL — delt med alle. Modellen vælger ikon ud fra betydnings-teksten, så skriv gerne nøgleord (fx "4K UHD resolution").</p>
     <div id="icons-content"></div>
+  </div>
+</div>
+
+<!-- NØGLESPEC-HEADER-SKABELONER (editor) -->
+<div id="templates-overlay" class="sessions-overlay" style="display:none;">
+  <div class="sessions-modal">
+    <div class="sessions-modal-head">
+      <h2>Header-skabeloner</h2>
+      <button class="ghost" id="templates-close">Luk</button>
+    </div>
+    <p class="sessions-sub">Genbrugelige nøglespec-headers — navngivne felt-sæt (op til 5 felter) som "Displays" eller "Mounts". Vælges pr. brand. Delt med alle. Felternes id må ikke ændres bagefter, da produkter kobler på id.</p>
+    <div id="templates-content"></div>
   </div>
 </div>
 
@@ -1061,8 +1079,12 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.7.3";
+const APP_VERSION = "5.8.0";
 const APP_BUILD = "2026-06-03";
+// 5.8.0: HEADER-SKABELONER (trin 1) — genbrugelige, navngivne nøglespec-skabeloner
+//   (op til 5 felter: id, label, ikon, default-caption), sky-synket (icepim_kf_templates).
+//   Brand vælger standard-skabelon + om header er til som standard. (Scraping/generator
+//   kobles på i trin 2; varelinje-styring i trin 3.)
 // 5.7.3: Nøgle-spec header har nu en toggle ("Nøgle-spec header i beskrivelsen"),
 //   default FRA, sky-synket. Gater headeren i eksport + preview. (Profil-baseret
 //   valg pr. varetype, fx kabler, er planlagt som næste skridt.)
@@ -1413,6 +1435,7 @@ const BRANDS = {
 // ovenpå. BRANDS muteres (const kan ikke gen-tildeles), men indholdet bygges om.
 const BUILTIN_BRANDS = JSON.parse(JSON.stringify(BRANDS));
 const CUSTOM_BRANDS_KEY = "icepim_custom_brands_v1";
+const CUSTOM_TEMPLATES_KEY = "icepim_kf_templates_v1";
 // *** NY *** (4.10.7) Standard test-ikon (Shopify-hostet). Bruges på features uden eget
 // billede indtil det rigtige ikon-bibliotek er på plads. Kan ryddes/ændres under Avanceret.
 const DEFAULT_TEST_ICON = "https://cdn.shopify.com/s/files/1/0648/8522/7743/files/Checkmark-ikon.png?v=1780246476";
@@ -1544,6 +1567,56 @@ async function cloudDeleteBrand(key) {
     const { error } = await _cloud(() => supa.from("icepim_brands").delete().eq("brand_key", key));
     if (error) console.warn("Sky: kunne ikke slette brand '" + key + "':", error.message);
   } catch (e) { console.warn("Sky: fejl ved sletning af brand:", e); }
+}
+
+// *** NY *** (5.8.0) Nøglespec-header-skabeloner (icepim_kf_templates): delte, navngivne
+// felt-sæt (op til 5 felter), uafhængige af brands. Mønster som icepim_icons / _brands.
+let _templatesCache = null; // { template_id: { name, fields: [{id,label,icon,default_caption}] } }
+function getTemplates() {
+  if (_templatesCache) return _templatesCache;
+  try { return JSON.parse(localStorage.getItem(CUSTOM_TEMPLATES_KEY)) || {}; }
+  catch (e) { return {}; }
+}
+function saveTemplatesLocal(obj) {
+  _templatesCache = obj;
+  try { localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(obj)); } catch (e) {}
+}
+async function loadTemplatesFromCloud() {
+  if (!supa) return;
+  try {
+    const { data, error } = await _cloud(() => supa.from("icepim_kf_templates").select("template_id, name, fields"));
+    if (error) { console.warn("Sky: kunne ikke hente skabeloner:", error.message); return; }
+    const obj = {};
+    (data || []).forEach(r => { if (r && r.template_id) obj[r.template_id] = { name: r.name || r.template_id, fields: Array.isArray(r.fields) ? r.fields : [] }; });
+    _templatesCache = obj;
+    try { localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(obj)); } catch (e) {}
+  } catch (e) { console.warn("Sky: fejl ved hentning af skabeloner:", e); }
+}
+async function cloudUpsertTemplate(id, name, fields) {
+  if (!_templatesCache) _templatesCache = {};
+  _templatesCache[id] = { name: name || id, fields: fields || [] };
+  saveTemplatesLocal(_templatesCache);
+  if (!supa) return;
+  try {
+    const { error } = await _cloud(() => supa.from("icepim_kf_templates").upsert({
+      template_id: id, name: name || id, fields: fields || [],
+      last_user_email: currentUser ? currentUser.email : null
+    }));
+    if (error) console.warn("Sky: kunne ikke gemme skabelon '" + id + "':", error.message);
+  } catch (e) { console.warn("Sky: fejl ved gem af skabelon:", e); }
+}
+async function cloudDeleteTemplate(id) {
+  if (_templatesCache) { delete _templatesCache[id]; saveTemplatesLocal(_templatesCache); }
+  if (!supa) return;
+  try {
+    const { error } = await _cloud(() => supa.from("icepim_kf_templates").delete().eq("template_id", id));
+    if (error) console.warn("Sky: kunne ikke slette skabelon '" + id + "':", error.message);
+  } catch (e) { console.warn("Sky: fejl ved sletning af skabelon:", e); }
+}
+function slugifyId(s) {
+  return String(s || "").toLowerCase().trim()
+    .replace(/[æä]/g, "ae").replace(/[øö]/g, "oe").replace(/å/g, "aa")
+    .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
 }
 
 // *** NY *** (v5.2) Delte indstillinger (icepim_settings, singleton id='global').
@@ -1992,6 +2065,102 @@ function renderBrandsList() {
 window.editBrand = (key) => { _brandEditKey = key; renderBrandForm(key); };
 window.cancelBrandEdit = () => { _brandEditKey = null; renderBrandsList(); };
 
+// *** NY *** (5.8.0) Header-skabelon-editor (modal). CRUD over genbrugelige felt-sæt.
+let _tplEditId = null;
+window.openTemplatesModal = () => { _tplEditId = null; renderTemplatesModal(); $("#templates-overlay").style.display = "flex"; };
+window.closeTemplatesModal = () => { $("#templates-overlay").style.display = "none"; };
+function renderTemplatesModal() {
+  if (_tplEditId === null) renderTemplatesList(); else renderTemplateForm(_tplEditId);
+}
+function renderTemplatesList() {
+  const t = getTemplates();
+  const ids = Object.keys(t).sort((a, b) => (t[a].name || a).localeCompare(t[b].name || b));
+  const rows = ids.length ? ids.map(id => {
+    const tpl = t[id];
+    const n = (tpl.fields || []).length;
+    const labels = (tpl.fields || []).map(f => f.label).filter(Boolean).join(", ");
+    return `<div class="br-row">
+      <span class="br-name">${escapeHtml(tpl.name || id)} <span class="muted mono">${n} felt${n === 1 ? "" : "er"}</span><br><span class="muted" style="font-size:12px;">${escapeHtml(labels)}</span></span>
+      <span>
+        <button class="ghost small" onclick="editTemplate('${id}')">Rediger</button>
+        <button class="ghost small" onclick="deleteTemplate('${id}')">Slet</button>
+      </span>
+    </div>`;
+  }).join("") : `<p class="muted">Ingen skabeloner endnu.</p>`;
+  $("#templates-content").innerHTML = `${rows}
+    <div style="margin-top:14px;"><button class="accent" onclick="editTemplate('')">+ Ny skabelon</button></div>`;
+}
+window.editTemplate = (id) => { _tplEditId = id; renderTemplateForm(id); };
+window.cancelTemplateEdit = () => { _tplEditId = null; renderTemplatesList(); };
+function renderTemplateForm(id) {
+  const isNew = id === "";
+  const t = isNew ? { name: "", fields: [] } : (getTemplates()[id] || { name: "", fields: [] });
+  const fields = t.fields || [];
+  const iconIds = Object.keys(getIcons()).sort();
+  const slot = (j) => {
+    const f = fields[j] || {};
+    const iconOpts = `<option value="">— intet —</option>` + iconIds.map(ic => `<option value="${escapeHtml(ic)}"${f.icon === ic ? " selected" : ""}>${escapeHtml(ic)}</option>`).join("");
+    return `<div class="tpl-row">
+      <input type="text" class="tpl-label" placeholder="Label (fx Brightness)" value="${escapeHtml(f.label || "")}" oninput="tplAutoId(${j})">
+      <input type="text" class="tpl-id" placeholder="id (auto)" value="${escapeHtml(f.id || "")}"${f.id ? "" : ' data-auto="1"'}>
+      <select class="tpl-icon">${iconOpts}</select>
+      <input type="text" class="tpl-cap" placeholder="default-caption (valgfri)" value="${escapeHtml(f.default_caption || "")}">
+    </div>`;
+  };
+  let slots = ""; for (let j = 0; j < 5; j++) slots += slot(j);
+  $("#templates-content").innerHTML = `
+    <p class="sessions-sub">${isNew ? "Ny skabelon" : "Redigerer: " + escapeHtml(t.name || id)}</p>
+    <div class="field"><label>Skabelon-navn</label>
+      <input type="text" id="tf-name" value="${escapeHtml(t.name || "")}" placeholder="fx Displays"></div>
+    <label>Felter (op til 5 — udfyld kun dem du vil bruge)</label>
+    <div class="tpl-head"><span>Label</span><span>id</span><span>Ikon</span><span>Default-caption</span></div>
+    <div id="tpl-fields">${slots}</div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="accent" onclick="saveTemplate('${isNew ? "" : id}')">Gem skabelon</button>
+      <button class="ghost" onclick="cancelTemplateEdit()">Annuller</button>
+    </div>`;
+}
+window.tplAutoId = (j) => {
+  const row = document.querySelectorAll("#tpl-fields .tpl-row")[j];
+  if (!row) return;
+  const idInp = row.querySelector(".tpl-id");
+  if (!idInp.value.trim() || idInp.dataset.auto === "1") {
+    idInp.value = slugifyId(row.querySelector(".tpl-label").value);
+    idInp.dataset.auto = "1";
+  }
+};
+window.saveTemplate = (editId) => {
+  const name = $("#tf-name").value.trim();
+  if (!name) { alert("Skabelon-navn er påkrævet."); return; }
+  const rows = document.querySelectorAll("#tpl-fields .tpl-row");
+  const fields = [];
+  const seen = new Set();
+  rows.forEach(r => {
+    const label = r.querySelector(".tpl-label").value.trim();
+    if (!label) return;
+    let fid = slugifyId(r.querySelector(".tpl-id").value.trim() || label);
+    if (!fid || seen.has(fid)) return;
+    seen.add(fid);
+    const icon = r.querySelector(".tpl-icon").value;
+    const cap = r.querySelector(".tpl-cap").value.trim();
+    const f = { id: fid, label };
+    if (icon) f.icon = icon;
+    if (cap) f.default_caption = cap;
+    fields.push(f);
+  });
+  if (!fields.length) { alert("Tilføj mindst ét felt med en label."); return; }
+  const tid = editId ? editId : (slugifyId(name) || ("tpl_" + Date.now()));
+  cloudUpsertTemplate(tid, name, fields);
+  _tplEditId = null;
+  renderTemplatesList();
+};
+window.deleteTemplate = (id) => {
+  const t = getTemplates()[id];
+  if (!confirm(`Slet skabelonen "${(t && t.name) || id}"?`)) return;
+  cloudDeleteTemplate(id);
+  renderTemplatesList();
+};
+
 function renderBrandForm(key) {
   const isNew = key === "";
   const b = isNew ? {} : (BRANDS[key] || {});
@@ -2013,6 +2182,18 @@ function renderBrandForm(key) {
       <textarea id="bf-notes" rows="5" placeholder="fx hvilke kilder der har gode billeder, fælder at undgå, B2B- vs konsument-site …">${escapeHtml(b.notes || "")}</textarea></div>
     <div class="field"><label>Placeholder-billede URL (valgfri — bruges hvis intet billede findes)</label>
       <input type="text" id="bf-placeholder" value="${escapeHtml(b.placeholder_image || "")}" placeholder="https://…"></div>
+    <div class="field"><label>Nøglespec-header (standard for dette brand)</label>
+      <select id="bf-kf-template">
+        ${(() => {
+          const tpls = getTemplates();
+          const ids = Object.keys(tpls).sort((a, c) => (tpls[a].name || a).localeCompare(tpls[c].name || c));
+          return `<option value="">(ingen)</option>` + ids.map(tid => `<option value="${escapeHtml(tid)}"${b.kf_template === tid ? " selected" : ""}>${escapeHtml(tpls[tid].name || tid)}</option>`).join("");
+        })()}
+      </select></div>
+    <label class="opt" style="display:flex;align-items:center;gap:8px;margin:2px 0 10px;">
+      <input type="checkbox" id="bf-kf-on"${b.kf_default_on ? " checked" : ""}>
+      <span>Header slået til som standard for produkter på dette brand</span>
+    </label>
     <div class="actions" style="margin-top:14px;">
       <button class="accent" onclick="saveBrand('${isNew ? "" : key}')">Gem profil</button>
       <button class="ghost" onclick="cancelBrandEdit()">Annuller</button>
@@ -2033,6 +2214,10 @@ window.saveBrand = (editKey) => {
   if (notes) entry.notes = notes;
   const placeholder = $("#bf-placeholder").value.trim();
   if (placeholder) entry.placeholder_image = placeholder;
+  // *** NY *** (5.8.0) Nøglespec-header pr. brand
+  const kfTpl = $("#bf-kf-template") ? $("#bf-kf-template").value : "";
+  if (kfTpl) entry.kf_template = kfTpl;
+  if ($("#bf-kf-on") && $("#bf-kf-on").checked) entry.kf_default_on = true;
 
   // Nøgle: behold ved redigering (også af indbygget → override under samme nøgle).
   const key = editKey ? editKey : brandKeyFromName(name, null);
@@ -4000,6 +4185,9 @@ function init() {
   $("#icons-btn").addEventListener("click", openIconsModal); // *** NY *** (v5.6)
   $("#icons-close").addEventListener("click", closeIconsModal);
   $("#icons-overlay").addEventListener("click", (e) => { if (e.target.id === "icons-overlay") closeIconsModal(); });
+  $("#templates-btn").addEventListener("click", openTemplatesModal); // *** NY *** (5.8.0)
+  $("#templates-close").addEventListener("click", closeTemplatesModal);
+  $("#templates-overlay").addEventListener("click", (e) => { if (e.target.id === "templates-overlay") closeTemplatesModal(); });
   $("#add-brand-btn").addEventListener("click", openBrandsModal); // *** NY *** (4.9.1)
   $("#brands-close").addEventListener("click", closeBrandsModal);
   $("#brands-overlay").addEventListener("click", (e) => { if (e.target.id === "brands-overlay") closeBrandsModal(); });
@@ -4042,6 +4230,7 @@ async function showApp() {
     await loadSettingsFromCloud(); // *** NY *** (v5.2) hent delte indstillinger FØR init
     await loadSessionsFromCloud(); // *** NY *** (v5.3) hent delte sessioner FØR init
     await loadIconsFromCloud(); // *** NY *** (v5.5) hent ikon-bibliotek FØR init
+    await loadTemplatesFromCloud(); // *** NY *** (5.8.0) hent header-skabeloner FØR init
     init();
   }
 }
