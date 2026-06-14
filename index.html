@@ -1057,8 +1057,14 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.7.0";
+const APP_VERSION = "5.7.2";
 const APP_BUILD = "2026-06-03";
+// 5.7.2: Bezel-sider korrekt — modellen leverer nu både mål og matchende side-tekst
+//   (top/sider/bund, venstre/højre, videovæg-split osv.) fra databladet; appen gætter
+//   ikke længere sider ud fra antal tal. Neutral fallback: Symmetrical / Asymmetric.
+// 5.7.1: Key-features captions — alle felter får altid en linje 3 (deterministisk
+//   default hvis modellen ikke leverer en). Bezel-caption udledes af antal mål:
+//   3 → "Top / sides / bottom", 2 → "Sides / bottom", 1 → "Symmetrical bezel".
 // 5.7.0: KEY-FEATURES HEADER — fem nøgle-specs (brightness, runtime, VESA, orientation,
 //   bezel) scrapes pr. skærm-produkt og renderes som en skalerende stribe øverst i
 //   HTML-beskrivelsen. Strukturerede felter i submit_product_data, redigerbar UI-sektion,
@@ -1234,7 +1240,7 @@ PDF: Hvis et PDF-datablad er vedhæftet samtalen, brug det som primær kilde til
 UVISHED: Hvis du ikke kan finde produktet med rimelig sikkerhed, kald STADIG submit_product_data men med tomme strenge / lister hvor data mangler. Returnér ALDRIG fabrikerede data.
 
 NØGLE-SPECIFIKATIONER (key_features) — KUN for skærme/display-produkter:
-Find fem nøgle-specs der vises som en header øverst i beskrivelsen: brightness (nits), runtime (drift-cyklus, fx 24/7 eller 16/7), VESA-mål i mm, orientation (landscape eller landscape+portrait) og bezel-bredde i mm. Brug ALTID det officielle datablad som primær kilde frem for marketing-tekst — disse tal skal være præcise. For hvert felt: angiv en kort visningsværdi, ELLER en tom streng hvis du ikke kan finde den for præcis DETTE produkt med rimelig sikkerhed (gæt aldrig — et manglende felt udelades bare fra headeren). Sæt uncertain=true hvis du gav en værdi, men ikke er sikker på at den passer til netop denne model, så brugeren kan verificere den. For ikke-skærme (kabler, beslag, tilbehør) lad ALLE felter være tomme.`;
+Find fem nøgle-specs der vises som en header øverst i beskrivelsen: brightness (nits), runtime (drift-cyklus, fx 24/7 eller 16/7), VESA-mål i mm, orientation (landscape eller landscape+portrait) og bezel-bredde i mm. Brug ALTID det officielle datablad som primær kilde frem for marketing-tekst — disse tal skal være præcise. For hvert felt: angiv en kort visningsværdi, ELLER en tom streng hvis du ikke kan finde den for præcis DETTE produkt med rimelig sikkerhed (gæt aldrig — et manglende felt udelades bare fra headeren). Sæt uncertain=true hvis du gav en værdi, men ikke er sikker på at den passer til netop denne model, så brugeren kan verificere den. For ikke-skærme (kabler, beslag, tilbehør) lad ALLE felter være tomme. Angiv ALTID en kort caption (1-3 ord) for hvert felt der har en værdi. BEZEL: i value angiver du målene (tal + enhed), og i caption den MATCHENDE side-tekst i SAMME rækkefølge — tag udgangspunkt i databladet, så tal og sider passer korrekt sammen. Eksempler: ens hele vejen rundt → value '9.9 mm', caption 'All sides'; top/sider/bund → value '9 / 3.1 / 16 mm', caption 'Top / sides / bottom'; venstre ≠ højre → value '9 / 12 mm', caption 'Left / right'; videovæg hvor top+venstre og bund+højre er ens → value '9 / 16 mm', caption 'Top·left / bottom·right'; alle fire forskellige → value '9 / 12 / 16 / 11 mm', caption 'Top / right / bottom / left'. Hold caption kort — du må gerne forkorte (fx 'T·L / B·R') så linjen ikke klippes. Gæt ALDRIG sammenhængen mellem tal og sider; står det ikke klart i kilden, så udelad caption.`;
 
 // ============================================================================
 // SUBMIT_PRODUCT_TOOL — formelt input-schema for det struktureret output
@@ -3016,7 +3022,8 @@ window.toggleSection = (i, key) => {
 function renderKeyFeaturesEditor(i, d) {
   const kf = d.key_features || {};
   const labels = { brightness:"Brightness", runtime:"Runtime", vesa:"VESA mount", orientation:"Orientation", bezel:"Bezel width" };
-  const ph = { brightness:"fx 500 nits", runtime:"fx 24/7", vesa:"fx 800 × 400", orientation:"", bezel:"fx 9.9 mm" };
+  const ph = { brightness:"fx 500 nits", runtime:"fx 24/7", vesa:"fx 800 × 400", orientation:"", bezel:"fx 9 / 3.1 / 16 mm" };
+  const capPh = { bezel:"sider, fx Top / sides / bottom" };
   const order = ["brightness","runtime","vesa","orientation","bezel"];
   const rows = order.map(key => {
     const f = kf[key] || {};
@@ -3031,7 +3038,7 @@ function renderKeyFeaturesEditor(i, d) {
     return `<div class="kf-edit-row${unc ? " kf-unc" : ""}">
       <span class="kf-edit-label">${labels[key]}</span>
       ${valInput}
-      <input type="text" class="kf-edit-cap" value="${escapeHtml(f.caption || "")}" placeholder="caption (valgfri)" onchange="updateKeyFeature(${i}, '${key}', 'caption', this.value)">
+      <input type="text" class="kf-edit-cap" value="${escapeHtml(f.caption || "")}" placeholder="${capPh[key] || "caption (valgfri)"}" onchange="updateKeyFeature(${i}, '${key}', 'caption', this.value)">
       <label class="kf-edit-unc" title="Usikker værdi — fjern fluebenet når du har tjekket den"><input type="checkbox" ${unc ? "checked" : ""} onchange="updateKeyFeature(${i}, '${key}', 'uncertain', this.checked)"> ⚠</label>
     </div>`;
   }).join("");
@@ -3713,13 +3720,20 @@ function buildKeyFeaturesHtml(kf) {
   const LABELS = { brightness:"Brightness", runtime:"Runtime", vesa:"VESA mount", orientation:"Orientation", bezel:"Bezel width" };
   const ORDER = ["brightness","runtime","vesa","orientation","bezel"];
   const orientText = (v) => v === "landscape" ? "Landscape" : v === "landscape_portrait" ? "Lands. & Portrait" : (v || "").trim();
+  // Linje 3 (caption): model/bruger-tekst hvis sat, ellers en deterministisk default,
+  // så ALLE felter altid har en tredje linje. Bezel: udled hvilke sider mm gælder.
+  const DEFAULT_CAP = { brightness:"Panel brightness", runtime:"Rated duty cycle", vesa:"Standard mount" };
+  const orientCap = (v) => v === "landscape_portrait" ? "Flexible installation" : v === "landscape" ? "Single orientation" : "";
+  const bezelCap = (v) => (String(v).match(/[\d.]+/g) || []).length <= 1 ? "Symmetrical bezel" : "Asymmetric bezel";
   const cells = [];
   for (const key of ORDER) {
     const f = kf[key] || {};
-    let val = (f.value == null ? "" : String(f.value)).trim();
-    if (key === "orientation") val = orientText(val);
+    const rawVal = (f.value == null ? "" : String(f.value)).trim();
+    const val = key === "orientation" ? orientText(rawVal) : rawVal;
     if (!val) continue;
-    cells.push({ key, val, cap: (f.caption == null ? "" : String(f.caption)).trim() });
+    let cap = (f.caption == null ? "" : String(f.caption)).trim();
+    if (!cap) cap = key === "bezel" ? bezelCap(val) : key === "orientation" ? orientCap(rawVal) : (DEFAULT_CAP[key] || "");
+    cells.push({ key, val, cap });
   }
   if (!cells.length) return "";
   const line = "display:block;overflow:hidden;white-space:nowrap;";
