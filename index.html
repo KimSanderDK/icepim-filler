@@ -890,6 +890,10 @@ pre.raw {
       <span>HTML-formateret beskrivelse i eksport</span>
     </label>
     <label class="opt">
+      <input type="checkbox" id="kf-header-mode">
+      <span>Nøgle-spec header i beskrivelsen (skærme)</span>
+    </label>
+    <label class="opt">
       <input type="checkbox" id="shopify-img-fix" checked>
       <span>Cloudinary-URLs Shopify-kompatible</span>
     </label>
@@ -1057,8 +1061,11 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.7.2";
+const APP_VERSION = "5.7.3";
 const APP_BUILD = "2026-06-03";
+// 5.7.3: Nøgle-spec header har nu en toggle ("Nøgle-spec header i beskrivelsen"),
+//   default FRA, sky-synket. Gater headeren i eksport + preview. (Profil-baseret
+//   valg pr. varetype, fx kabler, er planlagt som næste skridt.)
 // 5.7.2: Bezel-sider korrekt — modellen leverer nu både mål og matchende side-tekst
 //   (top/sider/bund, venstre/højre, videovæg-split osv.) fra databladet; appen gætter
 //   ikke længere sider ud fra antal tal. Neutral fallback: Symmetrical / Asymmetric.
@@ -1545,6 +1552,7 @@ function gatherSettings() {
   return {
     model: localStorage.getItem(LS.model) || "",
     htmlMode: localStorage.getItem(LS.htmlMode) || "",
+    kfHeader: localStorage.getItem(LS.kfHeader) || "",
     bulletSep: localStorage.getItem(LS.bulletSep) || "",
     shopifyImgFix: localStorage.getItem(LS.shopifyImgFix) || "",
     testIcon: localStorage.getItem(LS.testIcon),
@@ -1555,6 +1563,7 @@ function applySettingsToLocal(d) {
   if (!d) return;
   if (d.model != null && d.model !== "") localStorage.setItem(LS.model, d.model);
   if (d.htmlMode != null && d.htmlMode !== "") localStorage.setItem(LS.htmlMode, d.htmlMode);
+  if (d.kfHeader != null && d.kfHeader !== "") localStorage.setItem(LS.kfHeader, d.kfHeader);
   if (d.bulletSep != null && d.bulletSep !== "") localStorage.setItem(LS.bulletSep, d.bulletSep);
   if (d.shopifyImgFix != null && d.shopifyImgFix !== "") localStorage.setItem(LS.shopifyImgFix, d.shopifyImgFix);
   if (d.testIcon != null) localStorage.setItem(LS.testIcon, d.testIcon);
@@ -2087,6 +2096,7 @@ const LS = {
   systemPrompt: "icepim_system_prompt",
   brand: "icepim_brand",
   htmlMode: "icepim_html_mode",
+  kfHeader: "icepim_kf_header",
   bulletSep: "icepim_bullet_sep",
   shopifyImgFix: "icepim_shopify_img_fix",
   testIcon: "icepim_test_icon_url",
@@ -2109,6 +2119,7 @@ function loadSettings() {
   if (m) $("#model").value = m;
   $("#system-prompt").value = localStorage.getItem(LS.systemPrompt) || DEFAULT_SYSTEM_PROMPT;
   $("#html-mode").checked = localStorage.getItem(LS.htmlMode) === "1";
+  $("#kf-header-mode").checked = localStorage.getItem(LS.kfHeader) === "1";
   $("#bullet-sep").value = localStorage.getItem(LS.bulletSep) || "/";
   $("#shopify-img-fix").checked = localStorage.getItem(LS.shopifyImgFix) !== "0";
   if ($("#test-icon-url")) {
@@ -3764,8 +3775,9 @@ function buildDescriptionHtml(data, imgs) {
   const intro = (data.product_long_description || "").trim();
   const sections = (data.feature_sections || []).filter(s => s && s.title && s.description);
 
-  // *** NY *** (5.7.0) Key-features header øverst i beskrivelsen
-  const kfHtml = buildKeyFeaturesHtml(data.key_features);
+  // *** NY *** (5.7.0) Key-features header øverst i beskrivelsen — kun når toggle er slået til (5.7.3)
+  const kfOn = $("#kf-header-mode") && $("#kf-header-mode").checked;
+  const kfHtml = kfOn ? buildKeyFeaturesHtml(data.key_features) : "";
   if (kfHtml) parts.push(kfHtml);
 
   // Header-linje: navn + tagline
@@ -3919,6 +3931,11 @@ function init() {
   $("#model").addEventListener("change", e => { localStorage.setItem(LS.model, e.target.value); cloudSaveSettings(); });
   $("#html-mode").addEventListener("change", e => {
     localStorage.setItem(LS.htmlMode, e.target.checked ? "1" : "0");
+    cloudSaveSettings();
+    renderResults();
+  });
+  $("#kf-header-mode").addEventListener("change", e => {
+    localStorage.setItem(LS.kfHeader, e.target.checked ? "1" : "0");
     cloudSaveSettings();
     renderResults();
   });
