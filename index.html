@@ -895,10 +895,6 @@ pre.raw {
       <span>HTML-formateret beskrivelse i eksport</span>
     </label>
     <label class="opt">
-      <input type="checkbox" id="kf-header-mode">
-      <span>Nøgle-spec header i beskrivelsen (skærme)</span>
-    </label>
-    <label class="opt">
       <input type="checkbox" id="shopify-img-fix" checked>
       <span>Cloudinary-URLs Shopify-kompatible</span>
     </label>
@@ -1079,8 +1075,12 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.8.0";
+const APP_VERSION = "5.9.0";
 const APP_BUILD = "2026-06-03";
+// 5.9.0: HEADER-SKABELONER (trin 2) — key_features er nu en generisk liste styret af
+//   brandets aktive skabelon. Dynamisk prompt (NØGLE-SPEC-FELTER injiceres pr. søgning),
+//   generator + varekort-editor følger skabelonens felter, ikoner fra biblioteket.
+//   Global toggle fjernet; header styres af brandets skabelon + default-til/fra.
 // 5.8.0: HEADER-SKABELONER (trin 1) — genbrugelige, navngivne nøglespec-skabeloner
 //   (op til 5 felter: id, label, ikon, default-caption), sky-synket (icepim_kf_templates).
 //   Brand vælger standard-skabelon + om header er til som standard. (Scraping/generator
@@ -1268,8 +1268,7 @@ PDF: Hvis et PDF-datablad er vedhæftet samtalen, brug det som primær kilde til
 
 UVISHED: Hvis du ikke kan finde produktet med rimelig sikkerhed, kald STADIG submit_product_data men med tomme strenge / lister hvor data mangler. Returnér ALDRIG fabrikerede data.
 
-NØGLE-SPECIFIKATIONER (key_features) — KUN for skærme/display-produkter:
-Find fem nøgle-specs der vises som en header øverst i beskrivelsen: brightness (nits), runtime (drift-cyklus, fx 24/7 eller 16/7), VESA-mål i mm, orientation (landscape eller landscape+portrait) og bezel-bredde i mm. Brug ALTID det officielle datablad som primær kilde frem for marketing-tekst — disse tal skal være præcise. For hvert felt: angiv en kort visningsværdi, ELLER en tom streng hvis du ikke kan finde den for præcis DETTE produkt med rimelig sikkerhed (gæt aldrig — et manglende felt udelades bare fra headeren). Sæt uncertain=true hvis du gav en værdi, men ikke er sikker på at den passer til netop denne model, så brugeren kan verificere den. For ikke-skærme (kabler, beslag, tilbehør) lad ALLE felter være tomme. Angiv ALTID en kort caption (1-3 ord) for hvert felt der har en værdi. BEZEL: i value angiver du målene (tal + enhed), og i caption den MATCHENDE side-tekst i SAMME rækkefølge — tag udgangspunkt i databladet, så tal og sider passer korrekt sammen. Eksempler: ens hele vejen rundt → value '9.9 mm', caption 'All sides'; top/sider/bund → value '9 / 3.1 / 16 mm', caption 'Top / sides / bottom'; venstre ≠ højre → value '9 / 12 mm', caption 'Left / right'; videovæg hvor top+venstre og bund+højre er ens → value '9 / 16 mm', caption 'Top·left / bottom·right'; alle fire forskellige → value '9 / 12 / 16 / 11 mm', caption 'Top / right / bottom / left'. Hold caption kort — du må gerne forkorte (fx 'T·L / B·R') så linjen ikke klippes. Gæt ALDRIG sammenhængen mellem tal og sider; står det ikke klart i kilden, så udelad caption.`;
+NØGLE-SPECIFIKATIONER (key_features): Hvis der i brugerbeskeden står en liste under "NØGLE-SPEC-FELTER", skal du for HVERT felt i listen finde værdien til netop dette produkt og returnere én post i key_features-listen med: id (præcis som angivet i listen), value (kort visningsværdi, eller tom streng hvis du ikke kan finde den med rimelig sikkerhed — gæt ALDRIG), caption (kort kontekst, 1-3 ord), og uncertain=true hvis du gav en værdi men ikke er sikker på at den passer til netop denne model. Brug det officielle datablad som primær kilde frem for marketing-tekst. VIGTIGT om mål der varierer pr. side (fx ramme-/bezel-bredde): skriv målene i value og den KORREKTE, matchende side-tekst i caption i SAMME rækkefølge — fx value '9 / 3.1 / 16 mm' → caption 'Top / sides / bottom', value '9 / 12 mm' → caption 'Left / right', value '9 / 16 mm' (videovæg, top+venstre og bund+højre ens) → caption 'Top·left / bottom·right', value '9.9 mm' (ens hele vejen rundt) → caption 'All sides'. Gæt ALDRIG sammenhængen mellem tal og sider; står det ikke klart i kilden, lad caption være tom. Du må forkorte caption (fx 'T·L / B·R') så linjen ikke klippes. Står der INGEN NØGLE-SPEC-FELTER-liste i beskeden, returnér en tom key_features-liste.`;
 
 // ============================================================================
 // SUBMIT_PRODUCT_TOOL — formelt input-schema for det struktureret output
@@ -1368,17 +1367,22 @@ const SUBMIT_PRODUCT_TOOL = {
         items: { type: "string" },
         description: "3-6 short bullet points, each under 120 characters, sales/feature-oriented, in English. GOOD: 'Streams 4K HDR video at 60fps without buffering'. BAD: 'HDMI 2.0a, 10/100/1000 Mbit/s' (that is spec data, not a feature/benefit)."
       },
-      // *** NY *** (5.7.0) Key-features header — fem nøgle-specs øverst i beskrivelsen.
+      // *** NY *** (5.8.0/5.9.0) Key-features — generisk liste styret af den aktive skabelon.
       key_features: {
-        type: "object",
-        additionalProperties: false,
-        description: "Five key specifications shown as a header strip at the very top of the product description, for display/screen products. Prioritise the official DATASHEET over marketing copy — these numbers must be accurate. For each field set 'value' to a short display string, or an EMPTY string if you cannot find it for THIS exact product with reasonable confidence — never guess (a missing field is simply omitted from the strip). Set 'uncertain' to true when you DID provide a value but are not fully confident it is correct for this exact model, so the user can verify it. 'caption' is an optional 1-3 word context line. For non-display products (cables, mounts, accessories) leave all values empty.",
-        properties: {
-          brightness:  { type:"object", additionalProperties:false, properties:{ value:{type:"string", description:"Brightness incl. unit, e.g. '500 nits'. Empty if unknown."}, caption:{type:"string", description:"Optional 1-3 words, e.g. 'High brightness'."}, uncertain:{type:"boolean", description:"true if value provided but not certain for this exact model."} } },
-          runtime:     { type:"object", additionalProperties:false, properties:{ value:{type:"string", description:"Rated duty cycle, e.g. '24/7' or '16/7'. Empty if unknown."}, caption:{type:"string", description:"Optional, e.g. 'Commercial grade'."}, uncertain:{type:"boolean"} } },
-          vesa:        { type:"object", additionalProperties:false, properties:{ value:{type:"string", description:"VESA mounting pattern in mm, e.g. '800 × 400'. Empty if unknown."}, caption:{type:"string", description:"Optional, e.g. 'Standard mount'."}, uncertain:{type:"boolean"} } },
-          orientation: { type:"object", additionalProperties:false, properties:{ value:{type:"string", enum:["","landscape","landscape_portrait"], description:"'landscape' if landscape only; 'landscape_portrait' if portrait is also supported; empty if unknown."}, caption:{type:"string", description:"Optional, e.g. 'Flexible installation'."}, uncertain:{type:"boolean"} } },
-          bezel:       { type:"object", additionalProperties:false, properties:{ value:{type:"string", description:"Bezel width incl. unit, e.g. '9.9 mm', or two values if asymmetric e.g. '12 / 35 mm'. Empty if unknown."}, caption:{type:"string", description:"Optional, e.g. 'Ultra slim bezel'."}, uncertain:{type:"boolean"} } }
+        type: "array",
+        minItems: 0,
+        maxItems: 5,
+        description: "Fill ONE entry per field listed under 'NØGLE-SPEC-FELTER' in the user message. Use the field id EXACTLY as given. If no such list is present, return an empty array. Prioritise the official datasheet over marketing copy. Never guess — leave value empty if not found with reasonable confidence.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "value"],
+          properties: {
+            id: { type: "string", description: "The field id, copied EXACTLY from the NØGLE-SPEC-FELTER list (e.g. 'brightness', 'max_load')." },
+            value: { type: "string", description: "Short display value incl. unit, e.g. '500 nits' or '9 / 3.1 / 16 mm'. Empty string if not found with reasonable confidence." },
+            caption: { type: "string", description: "Short context, 1-3 words. For per-side measurements, the side labels matching value in the SAME order (e.g. 'Top / sides / bottom', 'Left / right'). Empty if the side mapping is unclear — never guess." },
+            uncertain: { type: "boolean", description: "true if a value is provided but not certain to be correct for this exact model." }
+          }
         }
       },
       // *** NY *** Verifikations-felter (brand-degradering, læring 4.8).
@@ -1625,7 +1629,6 @@ function gatherSettings() {
   return {
     model: localStorage.getItem(LS.model) || "",
     htmlMode: localStorage.getItem(LS.htmlMode) || "",
-    kfHeader: localStorage.getItem(LS.kfHeader) || "",
     bulletSep: localStorage.getItem(LS.bulletSep) || "",
     shopifyImgFix: localStorage.getItem(LS.shopifyImgFix) || "",
     testIcon: localStorage.getItem(LS.testIcon),
@@ -1636,7 +1639,6 @@ function applySettingsToLocal(d) {
   if (!d) return;
   if (d.model != null && d.model !== "") localStorage.setItem(LS.model, d.model);
   if (d.htmlMode != null && d.htmlMode !== "") localStorage.setItem(LS.htmlMode, d.htmlMode);
-  if (d.kfHeader != null && d.kfHeader !== "") localStorage.setItem(LS.kfHeader, d.kfHeader);
   if (d.bulletSep != null && d.bulletSep !== "") localStorage.setItem(LS.bulletSep, d.bulletSep);
   if (d.shopifyImgFix != null && d.shopifyImgFix !== "") localStorage.setItem(LS.shopifyImgFix, d.shopifyImgFix);
   if (d.testIcon != null) localStorage.setItem(LS.testIcon, d.testIcon);
@@ -2281,7 +2283,6 @@ const LS = {
   systemPrompt: "icepim_system_prompt",
   brand: "icepim_brand",
   htmlMode: "icepim_html_mode",
-  kfHeader: "icepim_kf_header",
   bulletSep: "icepim_bullet_sep",
   shopifyImgFix: "icepim_shopify_img_fix",
   testIcon: "icepim_test_icon_url",
@@ -2304,7 +2305,6 @@ function loadSettings() {
   if (m) $("#model").value = m;
   $("#system-prompt").value = localStorage.getItem(LS.systemPrompt) || DEFAULT_SYSTEM_PROMPT;
   $("#html-mode").checked = localStorage.getItem(LS.htmlMode) === "1";
-  $("#kf-header-mode").checked = localStorage.getItem(LS.kfHeader) === "1";
   $("#bullet-sep").value = localStorage.getItem(LS.bulletSep) || "/";
   $("#shopify-img-fix").checked = localStorage.getItem(LS.shopifyImgFix) !== "0";
   if ($("#test-icon-url")) {
@@ -2526,6 +2526,13 @@ function buildUserContent(product, pdfData) {
   if (_iconIds.length) {
     txt += `AVAILABLE ICONS — for each feature_section, set its "icon" to the ONE id below whose meaning best matches the feature, or "" if none fits. Use the id EXACTLY as written:\n`;
     _iconIds.forEach(id => { txt += `- ${id}: ${_icons[id].meaning}\n`; });
+    txt += `\n`;
+  }
+  // *** NY *** (5.9.0) Nøgle-spec-felter fra brandets aktive skabelon — modellen udfylder key_features.
+  const _kfTpl = cfg.kf_template ? getTemplates()[cfg.kf_template] : null;
+  if (_kfTpl && Array.isArray(_kfTpl.fields) && _kfTpl.fields.length) {
+    txt += `NØGLE-SPEC-FELTER — find værdien for HVERT felt og returnér én post i key_features (brug id'et EKSAKT):\n`;
+    _kfTpl.fields.forEach(f => { txt += `- ${f.id}: ${f.label}\n`; });
     txt += `\n`;
   }
   txt += "Find produktet og lever de berigede data ved at kalde submit_product_data-tool'et.";
@@ -2857,15 +2864,13 @@ function detectIssues(p) {
   if (colliding.length) {
     issues.push(`${colliding.length} bullet(s) indeholder separator-tegnet "${sep}" — splittes forkert ved import. Ret teksten eller skift separator.`);
   }
-  // *** NY *** (5.7.0) Key-features: gult flag når modellen er usikker på en værdi
-  const kf = d.key_features || {};
-  const kfLabels = { brightness:"Brightness", runtime:"Runtime", vesa:"VESA", orientation:"Orientation", bezel:"Bezel" };
-  for (const k of Object.keys(kfLabels)) {
-    const f = kf[k];
+  // *** NY *** (5.9.0) Key-features: gult flag når modellen er usikker på en værdi (array-form)
+  const kfArr = Array.isArray(d.key_features) ? d.key_features : [];
+  kfArr.forEach(f => {
     if (f && f.uncertain && String(f.value == null ? "" : f.value).trim()) {
-      issues.push(`nøgle-spec usikker: ${kfLabels[k]} «${String(f.value).trim()}» — tjek værdien`);
+      issues.push(`nøgle-spec usikker: ${f.id} «${String(f.value).trim()}» — tjek værdien`);
     }
-  }
+  });
   return issues;
 }
 
@@ -3021,7 +3026,7 @@ function renderResultBody(p, i) {
   const bullets = (d.bullet_points || []).filter(b => b);
   const sections = (d.feature_sections || []);
   const htmlMode = $("#html-mode") && $("#html-mode").checked;
-  const previewHtml = htmlMode ? buildDescriptionHtml(d, imgs) : "";
+  const previewHtml = htmlMode ? buildDescriptionHtml(d, imgs, resolveKfFields(BRANDS[$("#brand") && $("#brand").value], p)) : "";
 
   // *** NY *** (4.5.0) Per-sektion fold-tilstand. Tunge sektioner foldet sammen som
   // standard; en sektion auto-åbnes hvis et flag peger på den. Initialiseres én gang
@@ -3066,7 +3071,13 @@ function renderResultBody(p, i) {
     <textarea rows="2" maxlength="190" placeholder="fx '32-inch Full HD IPS commercial display rated for 24/7 operation with 500 nits brightness and Android 11.'" onchange="updateField(${i}, 'short_summary_description', this.value)">${escapeHtml(d.short_summary_description || "")}</textarea>
   </div>
 
-  ${collapsibleSection(i, 'keyfeat', 'Nøgle-specifikationer (header)', 'fem specs øverst i beskrivelsen', sec.keyfeat, renderKeyFeaturesEditor(i, d))}
+  ${(() => {
+    const _bc = BRANDS[$("#brand") && $("#brand").value];
+    const _tpl = _bc && _bc.kf_template ? getTemplates()[_bc.kf_template] : null;
+    const _fields = _tpl && Array.isArray(_tpl.fields) ? _tpl.fields : [];
+    if (!_fields.length) return "";
+    return collapsibleSection(i, 'keyfeat', 'Nøgle-specifikationer (header)', `${_fields.length} felt${_fields.length === 1 ? "" : "er"} · skabelon: ${escapeHtml(_tpl.name || "")}`, sec.keyfeat, renderKeyFeaturesEditor(i, d, _fields));
+  })()}
 
   ${collapsibleSection(i, 'desc', 'Intro-beskrivelse', `${(d.product_long_description || "").length} tegn`, sec.desc,
     `<textarea rows="5" onchange="updateField(${i}, 'product_long_description', this.value)">${escapeHtml(d.product_long_description || "")}</textarea>`)}
@@ -3215,27 +3226,20 @@ window.toggleSection = (i, key) => {
 
 // *** NY *** (5.7.0) Redigerbar editor for de fem key-features. Modellen leverer
 // værdier; brugeren kan rette dem og rydde det gule usikkerheds-flag efter tjek.
-function renderKeyFeaturesEditor(i, d) {
-  const kf = d.key_features || {};
-  const labels = { brightness:"Brightness", runtime:"Runtime", vesa:"VESA mount", orientation:"Orientation", bezel:"Bezel width" };
-  const ph = { brightness:"fx 500 nits", runtime:"fx 24/7", vesa:"fx 800 × 400", orientation:"", bezel:"fx 9 / 3.1 / 16 mm" };
-  const capPh = { bezel:"sider, fx Top / sides / bottom" };
-  const order = ["brightness","runtime","vesa","orientation","bezel"];
-  const rows = order.map(key => {
-    const f = kf[key] || {};
+function renderKeyFeaturesEditor(i, d, fields) {
+  const arr = Array.isArray(d.key_features) ? d.key_features : [];
+  const byId = {};
+  arr.forEach(e => { if (e && e.id) byId[e.id] = e; });
+  const rows = (fields || []).map(def => {
+    const f = byId[def.id] || {};
     const unc = !!f.uncertain;
-    const valInput = key === "orientation"
-      ? `<select onchange="updateKeyFeature(${i}, 'orientation', 'value', this.value)">
-           <option value=""${!f.value ? " selected" : ""}>—</option>
-           <option value="landscape"${f.value === "landscape" ? " selected" : ""}>Landscape</option>
-           <option value="landscape_portrait"${f.value === "landscape_portrait" ? " selected" : ""}>Landscape + Portrait</option>
-         </select>`
-      : `<input type="text" value="${escapeHtml(f.value || "")}" placeholder="${ph[key]}" onchange="updateKeyFeature(${i}, '${key}', 'value', this.value)">`;
+    const capPh = def.default_caption ? escapeHtml(def.default_caption) : "caption (valgfri)";
+    const id = escapeHtml(def.id);
     return `<div class="kf-edit-row${unc ? " kf-unc" : ""}">
-      <span class="kf-edit-label">${labels[key]}</span>
-      ${valInput}
-      <input type="text" class="kf-edit-cap" value="${escapeHtml(f.caption || "")}" placeholder="${capPh[key] || "caption (valgfri)"}" onchange="updateKeyFeature(${i}, '${key}', 'caption', this.value)">
-      <label class="kf-edit-unc" title="Usikker værdi — fjern fluebenet når du har tjekket den"><input type="checkbox" ${unc ? "checked" : ""} onchange="updateKeyFeature(${i}, '${key}', 'uncertain', this.checked)"> ⚠</label>
+      <span class="kf-edit-label">${escapeHtml(def.label || def.id)}</span>
+      <input type="text" value="${escapeHtml(f.value || "")}" placeholder="værdi" onchange="updateKeyFeature(${i}, '${id}', 'value', this.value)">
+      <input type="text" class="kf-edit-cap" value="${escapeHtml(f.caption || "")}" placeholder="${capPh}" onchange="updateKeyFeature(${i}, '${id}', 'caption', this.value)">
+      <label class="kf-edit-unc" title="Usikker værdi — fjern fluebenet når du har tjekket den"><input type="checkbox" ${unc ? "checked" : ""} onchange="updateKeyFeature(${i}, '${id}', 'uncertain', this.checked)"> ⚠</label>
     </div>`;
   }).join("");
   return `<div class="kf-edit">${rows}</div>`;
@@ -3383,13 +3387,14 @@ window.updateField = (i, field, val) => {
   renderResults();
 };
 
-// *** NY *** (5.7.0) Opdater et nøgle-spec-felt (value / caption / uncertain).
-window.updateKeyFeature = (i, key, prop, val) => {
+// *** NY *** (5.9.0) Opdater et nøgle-spec-felt i array-formen (find/opret post på id).
+window.updateKeyFeature = (i, id, prop, val) => {
   const p = state.products[i];
   if (!p.data) p.data = {};
-  if (!p.data.key_features) p.data.key_features = {};
-  if (!p.data.key_features[key]) p.data.key_features[key] = {};
-  p.data.key_features[key][prop] = val;
+  if (!Array.isArray(p.data.key_features)) p.data.key_features = [];
+  let e = p.data.key_features.find(x => x && x.id === id);
+  if (!e) { e = { id }; p.data.key_features.push(e); }
+  e[prop] = val;
   p.issues = detectIssues(p);
   renderResults();
 };
@@ -3857,7 +3862,7 @@ function buildRow(p, brandCfg) {
   // Hvis HTML-mode er slaaet til, byg HTML-beskrivelse — ellers brug intro-tekst
   const htmlMode = $("#html-mode") && $("#html-mode").checked;
   const description = htmlMode
-    ? buildDescriptionHtml(d, imgs)
+    ? buildDescriptionHtml(d, imgs, resolveKfFields(brandCfg, p))
     : (d.product_long_description || "");
 
   const row = {};
@@ -3903,33 +3908,24 @@ function buildRow(p, brandCfg) {
 // beskrivelsen. RENT inline-CSS: Shopify fjerner <script> (og kan fjerne <style>),
 // så alt ligger i style-attributter. Én række, skalerer med container-bredde (cqi).
 // Felter uden værdi udelades, så striben renderer 3-5 celler pænt.
-function buildKeyFeaturesHtml(kf) {
-  if (!kf || typeof kf !== "object") return "";
+function buildKeyFeaturesHtml(kfArray, fieldDefs) {
+  // kfArray: [{id,value,caption,uncertain}] fra modellen. fieldDefs: skabelonens felter
+  // [{id,label,icon,default_caption}] — bestemmer rækkefølge, label, ikon og default-caption.
+  if (!Array.isArray(fieldDefs) || !fieldDefs.length) return "";
   const NAVY = "#002856", MUTED = "#8a97a5";
-  const ICONS = {
-    brightness:  '<svg viewBox="0 0 24 24" fill="none" stroke="#002856" stroke-width="1.6" stroke-linecap="round" style="width:100%;height:100%;display:block"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.2 5.2l1.9 1.9M16.9 16.9l1.9 1.9M18.8 5.2l-1.9 1.9M7.1 16.9l-1.9 1.9"/></svg>',
-    runtime:     '<svg viewBox="0 0 24 24" fill="none" stroke="#002856" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:100%;height:100%;display:block"><circle cx="12" cy="12" r="9"/><path d="M12 7.2v5.1l3.3 2"/></svg>',
-    vesa:        '<svg viewBox="0 0 24 24" fill="none" stroke="#002856" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:100%;height:100%;display:block"><path d="M4 7V4h3M20 7V4h-3M4 17v3h3M20 17v3h-3"/><circle cx="9" cy="9" r="1.1" fill="#002856" stroke="none"/><circle cx="15" cy="9" r="1.1" fill="#002856" stroke="none"/><circle cx="9" cy="15" r="1.1" fill="#002856" stroke="none"/><circle cx="15" cy="15" r="1.1" fill="#002856" stroke="none"/></svg>',
-    orientation: '<svg viewBox="0 0 24 24" fill="none" stroke="#002856" stroke-width="1.6" stroke-linejoin="round" style="width:100%;height:100%;display:block"><rect x="2.5" y="6" width="12" height="9" rx="1.2"/><path d="M6 18.5h6"/><rect x="16" y="9" width="5.5" height="10" rx="1.1"/></svg>',
-    bezel:       '<svg viewBox="0 0 24 24" fill="none" stroke="#002856" stroke-width="1.6" stroke-linejoin="round" style="width:100%;height:100%;display:block"><rect x="3" y="6" width="16" height="12" rx="1.4"/><path d="M19 9.5h2M19 14.5h2"/></svg>'
-  };
-  const LABELS = { brightness:"Brightness", runtime:"Runtime", vesa:"VESA mount", orientation:"Orientation", bezel:"Bezel width" };
-  const ORDER = ["brightness","runtime","vesa","orientation","bezel"];
-  const orientText = (v) => v === "landscape" ? "Landscape" : v === "landscape_portrait" ? "Lands. & Portrait" : (v || "").trim();
-  // Linje 3 (caption): model/bruger-tekst hvis sat, ellers en deterministisk default,
-  // så ALLE felter altid har en tredje linje. Bezel: udled hvilke sider mm gælder.
-  const DEFAULT_CAP = { brightness:"Panel brightness", runtime:"Rated duty cycle", vesa:"Standard mount" };
-  const orientCap = (v) => v === "landscape_portrait" ? "Flexible installation" : v === "landscape" ? "Single orientation" : "";
-  const bezelCap = (v) => (String(v).match(/[\d.]+/g) || []).length <= 1 ? "Symmetrical bezel" : "Asymmetric bezel";
+  const lib = getIcons();
+  const byId = {};
+  (Array.isArray(kfArray) ? kfArray : []).forEach(e => { if (e && e.id) byId[e.id] = e; });
   const cells = [];
-  for (const key of ORDER) {
-    const f = kf[key] || {};
-    const rawVal = (f.value == null ? "" : String(f.value)).trim();
-    const val = key === "orientation" ? orientText(rawVal) : rawVal;
-    if (!val) continue;
-    let cap = (f.caption == null ? "" : String(f.caption)).trim();
-    if (!cap) cap = key === "bezel" ? bezelCap(val) : key === "orientation" ? orientCap(rawVal) : (DEFAULT_CAP[key] || "");
-    cells.push({ key, val, cap });
+  for (const def of fieldDefs) {
+    if (!def || !def.id) continue;
+    const e = byId[def.id] || {};
+    const val = (e.value == null ? "" : String(e.value)).trim();
+    if (!val) continue; // manglende værdi → cellen udelades
+    let cap = (e.caption == null ? "" : String(e.caption)).trim();
+    if (!cap) cap = (def.default_caption || "").trim();
+    const iconUrl = (def.icon && lib[def.icon] && lib[def.icon].url) ? lib[def.icon].url : "";
+    cells.push({ label: def.label || def.id, val, cap, iconUrl });
   }
   if (!cells.length) return "";
   const line = "display:block;overflow:hidden;white-space:nowrap;";
@@ -3938,32 +3934,47 @@ function buildKeyFeaturesHtml(kf) {
   const sCap = line + "font-size:clamp(9px,1.02cqi,13px);color:" + MUTED + ";";
   const cellHtml = cells.map((c, idx) => {
     const div = idx === 0 ? "" : "border-left:0.5px solid rgba(0,40,86,0.10);";
-    const icon = '<span style="width:clamp(20px,2.8cqi,34px);height:clamp(20px,2.8cqi,34px);flex:0 0 auto;display:block;">' + (ICONS[c.key] || "") + '</span>';
+    const icon = c.iconUrl
+      ? '<img src="' + escapeHtml(c.iconUrl) + '" alt="" style="width:clamp(20px,2.8cqi,34px);height:clamp(20px,2.8cqi,34px);object-fit:contain;flex:0 0 auto;display:block;">'
+      : '';
+    const gap = icon ? 'gap:clamp(8px,1.2cqi,16px);' : '';
     const lines = '<span style="display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden;">'
-      + '<span style="' + sLab + '">' + escapeHtml(LABELS[c.key]) + '</span>'
+      + '<span style="' + sLab + '">' + escapeHtml(c.label) + '</span>'
       + '<span style="' + sVal + '">' + escapeHtml(c.val) + '</span>'
       + (c.cap ? '<span style="' + sCap + '">' + escapeHtml(c.cap) + '</span>' : '')
       + '</span>';
-    return '<div style="display:flex;align-items:center;gap:clamp(8px,1.2cqi,16px);padding:clamp(5px,0.8cqi,10px) clamp(14px,1.9cqi,24px);min-width:0;overflow:hidden;' + div + '">' + icon + lines + '</div>';
+    return '<div style="display:flex;align-items:center;' + gap + 'padding:clamp(5px,0.8cqi,10px) clamp(14px,1.9cqi,24px);min-width:0;overflow:hidden;' + div + '">' + icon + lines + '</div>';
   }).join("");
   return '<div style="container-type:inline-size;width:100%;margin:0 0 18px;">'
     + '<div style="background:#ffffff;border:0.5px solid rgba(0,40,86,0.12);border-radius:10px;box-shadow:0 1px 3px rgba(0,40,86,0.06);display:grid;grid-template-columns:repeat(' + cells.length + ',1fr);overflow:hidden;">'
     + cellHtml + '</div></div>';
 }
 
+// *** NY *** (5.9.0) Find aktiv skabelon-felt-liste for et produkt, eller null hvis header er fra.
+// Forward-compat: produkt-override (p.kfTemplate / p.kfHeader) vinder over brandets default (trin 3).
+function resolveKfFields(brandCfg, p) {
+  if (!brandCfg) return null;
+  const tplId = (p && p.kfTemplate) || brandCfg.kf_template;
+  const tpl = tplId ? getTemplates()[tplId] : null;
+  if (!tpl || !Array.isArray(tpl.fields) || !tpl.fields.length) return null;
+  const on = (p && typeof p.kfHeader === "boolean") ? p.kfHeader : !!brandCfg.kf_default_on;
+  return on ? tpl.fields : null;
+}
+
 // Bygger HTML-beskrivelse i samme stil som InterSign-shoppens eksisterende produkter
 // (Giada-template: tagline + intro + 2-kolonne alternerende feature-tabel).
-function buildDescriptionHtml(data, imgs) {
+function buildDescriptionHtml(data, imgs, kfFields) {
   const parts = [];
   const name = (data.product_name || "").trim();
   const tagline = (data.tagline || "").trim();
   const intro = (data.product_long_description || "").trim();
   const sections = (data.feature_sections || []).filter(s => s && s.title && s.description);
 
-  // *** NY *** (5.7.0) Key-features header øverst i beskrivelsen — kun når toggle er slået til (5.7.3)
-  const kfOn = $("#kf-header-mode") && $("#kf-header-mode").checked;
-  const kfHtml = kfOn ? buildKeyFeaturesHtml(data.key_features) : "";
-  if (kfHtml) parts.push(kfHtml);
+  // *** NY *** (5.9.0) Key-features header øverst — renderes når en aktiv skabelon er givet.
+  if (Array.isArray(kfFields) && kfFields.length) {
+    const kfHtml = buildKeyFeaturesHtml(data.key_features, kfFields);
+    if (kfHtml) parts.push(kfHtml);
+  }
 
   // Header-linje: navn + tagline
   if (name || tagline) {
@@ -4116,11 +4127,6 @@ function init() {
   $("#model").addEventListener("change", e => { localStorage.setItem(LS.model, e.target.value); cloudSaveSettings(); });
   $("#html-mode").addEventListener("change", e => {
     localStorage.setItem(LS.htmlMode, e.target.checked ? "1" : "0");
-    cloudSaveSettings();
-    renderResults();
-  });
-  $("#kf-header-mode").addEventListener("change", e => {
-    localStorage.setItem(LS.kfHeader, e.target.checked ? "1" : "0");
     cloudSaveSettings();
     renderResults();
   });
