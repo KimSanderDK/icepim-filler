@@ -1081,8 +1081,20 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.10.0";
+const APP_VERSION = "5.10.4";
 const APP_BUILD = "2026-06-03";
+// 5.10.4: (1) Caption-præcedens vendt — skabelonens default-caption er konstant og vinder;
+//   kun felter uden default (bezel) får model-leveret caption. Sikrer ens linje 3.
+//   (2) Orientation forkortes til 'Lands./Portrait' (skråstreg, ingen mellemrum).
+// 5.10.3: Header-ensartethed — ikoner og hver linje (label/værdi/caption) skaleres nu
+//   efter HELE stribens bredde, så de er identiske på tværs af alle felter. Værdi-skrift
+//   kalibreret så længste forkortede værdi passer ved 5 kolonner uden at klippe.
+// 5.10.2: Header-værdi får margin så sidste tegn ikke klippes (lavere skrift-loft 18px,
+//   mindre ikon/padding) — fjerner kanttilfældet hvor teksten ramte cellekanten præcist.
+// 5.10.1: Fix — (1) bullet-editoren mappede den filtrerede liste, så nye tomme bullets
+//   forsvandt; mapper nu råt array med korrekte indekser. (2) Header-værdier skaleres nu
+//   efter cellens bredde (container pr. celle) i stedet for stribens, så de ikke klipper;
+//   prompten forkorter også værdier (orientation → 'Lands. & Portrait').
 // 5.10.0: HEADER-SKABELONER (trin 3) — varelinje-styring: vis/skjul header pr. produkt
 //   (override af brandets default), vælg alternativ skabelon pr. produkt, og "Søg igen
 //   (kun header)" der via et fokuseret kald KUN henter key_features for den valgte
@@ -1278,7 +1290,7 @@ PDF: Hvis et PDF-datablad er vedhæftet samtalen, brug det som primær kilde til
 
 UVISHED: Hvis du ikke kan finde produktet med rimelig sikkerhed, kald STADIG submit_product_data men med tomme strenge / lister hvor data mangler. Returnér ALDRIG fabrikerede data.
 
-NØGLE-SPECIFIKATIONER (key_features): Hvis der i brugerbeskeden står en liste under "NØGLE-SPEC-FELTER", skal du for HVERT felt i listen finde værdien til netop dette produkt og returnere én post i key_features-listen med: id (præcis som angivet i listen), value (kort visningsværdi, eller tom streng hvis du ikke kan finde den med rimelig sikkerhed — gæt ALDRIG), caption (kort kontekst, 1-3 ord), og uncertain=true hvis du gav en værdi men ikke er sikker på at den passer til netop denne model. Brug det officielle datablad som primær kilde frem for marketing-tekst. VIGTIGT om mål der varierer pr. side (fx ramme-/bezel-bredde): skriv målene i value og den KORREKTE, matchende side-tekst i caption i SAMME rækkefølge — fx value '9 / 3.1 / 16 mm' → caption 'Top / sides / bottom', value '9 / 12 mm' → caption 'Left / right', value '9 / 16 mm' (videovæg, top+venstre og bund+højre ens) → caption 'Top·left / bottom·right', value '9.9 mm' (ens hele vejen rundt) → caption 'All sides'. Gæt ALDRIG sammenhængen mellem tal og sider; står det ikke klart i kilden, lad caption være tom. Du må forkorte caption (fx 'T·L / B·R') så linjen ikke klippes. Står der INGEN NØGLE-SPEC-FELTER-liste i beskeden, returnér en tom key_features-liste.`;
+NØGLE-SPECIFIKATIONER (key_features): Hvis der i brugerbeskeden står en liste under "NØGLE-SPEC-FELTER", skal du for HVERT felt i listen finde værdien til netop dette produkt og returnere én post i key_features-listen med: id (præcis som angivet i listen), value (kort visningsværdi, eller tom streng hvis du ikke kan finde den med rimelig sikkerhed — gæt ALDRIG), caption (kort kontekst, 1-3 ord), og uncertain=true hvis du gav en værdi men ikke er sikker på at den passer til netop denne model. Brug det officielle datablad som primær kilde frem for marketing-tekst. VIGTIGT om mål der varierer pr. side (fx ramme-/bezel-bredde): skriv målene i value og den KORREKTE, matchende side-tekst i caption i SAMME rækkefølge — fx value '9 / 3.1 / 16 mm' → caption 'Top / sides / bottom', value '9 / 12 mm' → caption 'Left / right', value '9 / 16 mm' (videovæg, top+venstre og bund+højre ens) → caption 'Top·left / bottom·right', value '9.9 mm' (ens hele vejen rundt) → caption 'All sides'. Gæt ALDRIG sammenhængen mellem tal og sider; står det ikke klart i kilden, lad caption være tom. Du må forkorte caption (fx 'T·L / B·R') så linjen ikke klippes. VÆRDIEN (value) skal også være KORT nok til at stå på én linje i et smalt felt — forkort hvor nødvendigt. Specielt orientering: hvis en skærm understøtter BÅDE landscape og portrait, skriv 'Lands./Portrait' (med skråstreg, ingen mellemrum omkring, ikke de fulde ord); hvis kun landscape, skriv 'Landscape'. Står der INGEN NØGLE-SPEC-FELTER-liste i beskeden, returnér en tom key_features-liste.`;
 
 // ============================================================================
 // SUBMIT_PRODUCT_TOOL — formelt input-schema for det struktureret output
@@ -3251,17 +3263,21 @@ function renderResultBody(p, i) {
     </div>
   </div>
 
-  ${collapsibleSection(i, 'bullets', 'Bullet points', `${bullets.length} bullet${bullets.length === 1 ? "" : "s"}`, sec.bullets,
-    `<div class="bullet-list">
-      ${bullets.map((b, j) => `<div class="bullet-item">
-        <span class="marker">•</span>
-        <input type="text" value="${escapeHtml(b)}" onchange="updateBullet(${i}, ${j}, this.value)">
-        <button class="rm" title="fjern" onclick="removeBullet(${i}, ${j})">×</button>
-      </div>`).join("")}
-    </div>
-    <div class="actions">
-      <button class="small" onclick="addBullet(${i})">+ Tilføj bullet</button>
-    </div>`)}
+  ${(() => {
+    const raw = d.bullet_points || [];
+    const cnt = raw.filter(b => b && String(b).trim()).length;
+    return collapsibleSection(i, 'bullets', 'Bullet points', `${cnt} bullet${cnt === 1 ? "" : "s"}`, sec.bullets,
+      `<div class="bullet-list">
+        ${raw.map((b, j) => `<div class="bullet-item">
+          <span class="marker">•</span>
+          <input type="text" value="${escapeHtml(b)}" onchange="updateBullet(${i}, ${j}, this.value)">
+          <button class="rm" title="fjern" onclick="removeBullet(${i}, ${j})">×</button>
+        </div>`).join("")}
+      </div>
+      <div class="actions">
+        <button class="small" onclick="addBullet(${i})">+ Tilføj bullet</button>
+      </div>`);
+  })()}
 
   ${htmlMode ? collapsibleSection(i, 'html', 'HTML-preview', 'sådan ser det ud på shoppen', sec.html,
     `<iframe class="html-preview" sandbox="" srcdoc="${escapeHtml('<!DOCTYPE html><html><head><style>body{font-family:system-ui,sans-serif;color:#18181b;margin:0;padding:16px;font-size:14px;line-height:1.5;}img{max-width:100%;height:auto;}table{border-collapse:collapse;width:100%;}.page-caption b{font-size:15px;}.desc{margin-top:6px;color:#3f3f46;}</style></head><body>' + previewHtml + '</body></html>')}"></iframe>
@@ -4065,20 +4081,25 @@ function buildKeyFeaturesHtml(kfArray, fieldDefs) {
     const e = byId[def.id] || {};
     const val = (e.value == null ? "" : String(e.value)).trim();
     if (!val) continue; // manglende værdi → cellen udelades
-    let cap = (e.caption == null ? "" : String(e.caption)).trim();
-    if (!cap) cap = (def.default_caption || "").trim();
+    // Caption: har feltet en default-caption er den KONSTANT og vinder (ensartet på tværs
+    // af varer). Kun felter UDEN default-caption (fx bezel) får model-leveret, data-afhængig caption.
+    let cap = (def.default_caption || "").trim();
+    if (!cap) cap = (e.caption == null ? "" : String(e.caption)).trim();
     const iconUrl = (def.icon && lib[def.icon] && lib[def.icon].url) ? lib[def.icon].url : "";
     cells.push({ label: def.label || def.id, val, cap, iconUrl });
   }
   if (!cells.length) return "";
+  // Skriften skaleres efter CELLENS bredde (container-type pr. celle), så værdien
+  // passer i sit eget felt ved et hvilket som helst antal celler — ren CSS (ingen JS,
+  // da preview er en sandboxed iframe og Shopify fjerner scripts).
   const line = "display:block;overflow:hidden;white-space:nowrap;";
-  const sLab = line + "font-size:clamp(8px,0.85cqi,11px);font-weight:600;letter-spacing:0.10em;color:" + NAVY + ";text-transform:uppercase;";
-  const sVal = line + "font-size:clamp(11px,1.55cqi,20px);font-weight:600;color:" + NAVY + ";line-height:1.05;";
-  const sCap = line + "font-size:clamp(9px,1.02cqi,13px);color:" + MUTED + ";";
+  const sLab = line + "font-size:clamp(8px,0.85cqi,11px);font-weight:600;letter-spacing:0.08em;color:" + NAVY + ";text-transform:uppercase;";
+  const sVal = line + "font-size:clamp(10px,1.3cqi,18px);font-weight:600;color:" + NAVY + ";line-height:1.05;";
+  const sCap = line + "font-size:clamp(9px,1cqi,13px);color:" + MUTED + ";";
   const cellHtml = cells.map((c, idx) => {
     const div = idx === 0 ? "" : "border-left:0.5px solid rgba(0,40,86,0.10);";
     const icon = c.iconUrl
-      ? '<img src="' + escapeHtml(c.iconUrl) + '" alt="" style="width:clamp(20px,2.8cqi,34px);height:clamp(20px,2.8cqi,34px);object-fit:contain;flex:0 0 auto;display:block;">'
+      ? '<img src="' + escapeHtml(c.iconUrl) + '" alt="" style="width:clamp(18px,2.4cqi,30px);height:clamp(18px,2.4cqi,30px);object-fit:contain;flex:0 0 auto;display:block;">'
       : '';
     const gap = icon ? 'gap:clamp(8px,1.2cqi,16px);' : '';
     const lines = '<span style="display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden;">'
@@ -4086,7 +4107,7 @@ function buildKeyFeaturesHtml(kfArray, fieldDefs) {
       + '<span style="' + sVal + '">' + escapeHtml(c.val) + '</span>'
       + (c.cap ? '<span style="' + sCap + '">' + escapeHtml(c.cap) + '</span>' : '')
       + '</span>';
-    return '<div style="display:flex;align-items:center;' + gap + 'padding:clamp(5px,0.8cqi,10px) clamp(14px,1.9cqi,24px);min-width:0;overflow:hidden;' + div + '">' + icon + lines + '</div>';
+    return '<div style="display:flex;align-items:center;' + gap + 'padding:clamp(5px,0.8cqi,10px) clamp(10px,1.5cqi,22px);min-width:0;overflow:hidden;' + div + '">' + icon + lines + '</div>';
   }).join("");
   return '<div style="container-type:inline-size;width:100%;margin:0 0 18px;">'
     + '<div style="background:#ffffff;border:0.5px solid rgba(0,40,86,0.12);border-radius:10px;box-shadow:0 1px 3px rgba(0,40,86,0.06);display:grid;grid-template-columns:repeat(' + cells.length + ',1fr);overflow:hidden;">'
