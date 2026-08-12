@@ -983,6 +983,10 @@ pre.raw {
   </div>
 
   <div class="actions" style="margin-top: 16px;">
+    <label class="opt" title="Slå fra ved opdaterings-kørsler hvor varerne allerede har de rigtige billeder i IcePIM — sparer billed-kald og fetches. Billed-kolonnerne eksporteres tomme (importer sat til 'tilføj til eksisterende').">
+      <input type="checkbox" id="fetch-images-mode" checked>
+      <span>Hent billeder</span>
+    </label>
     <button class="accent" id="run-btn">Hent data</button>
     <button class="ghost" id="cancel-btn" style="display:none;">Stop</button>
     <button class="ghost" id="clear-results">Ryd resultater</button>
@@ -1081,8 +1085,13 @@ pre.raw {
 // KONFIGURATION
 // ============================================================================
 
-const APP_VERSION = "5.10.4";
-const APP_BUILD = "2026-06-03";
+const APP_VERSION = "5.11.0";
+const APP_BUILD = "2026-08-12";
+// 5.11.0: "Hent billeder"-flueben i INPUT (default til, sky-synket). Slået fra:
+//   prompten forbyder billed-søgning (budget går til tekst/data), returnerede URLs
+//   tømmes, og det dedikerede billed-kald springes over. Til opdaterings-kørsler
+//   hvor IcePIM allerede har billederne (importer: 'tilføj til eksisterende').
+//   Per-produkt "Opdatér billeder" virker fortsat uanset fluebenet.
 // 5.10.4: (1) Caption-præcedens vendt — skabelonens default-caption er konstant og vinder;
 //   kun felter uden default (bezel) får model-leveret caption. Sikrer ens linje 3.
 //   (2) Orientation forkortes til 'Lands./Portrait' (skråstreg, ingen mellemrum).
@@ -1680,6 +1689,7 @@ function gatherSettings() {
   return {
     model: localStorage.getItem(LS.model) || "",
     htmlMode: localStorage.getItem(LS.htmlMode) || "",
+    fetchImages: localStorage.getItem(LS.fetchImages) || "",
     bulletSep: localStorage.getItem(LS.bulletSep) || "",
     shopifyImgFix: localStorage.getItem(LS.shopifyImgFix) || "",
     testIcon: localStorage.getItem(LS.testIcon),
@@ -1690,6 +1700,7 @@ function applySettingsToLocal(d) {
   if (!d) return;
   if (d.model != null && d.model !== "") localStorage.setItem(LS.model, d.model);
   if (d.htmlMode != null && d.htmlMode !== "") localStorage.setItem(LS.htmlMode, d.htmlMode);
+  if (d.fetchImages != null && d.fetchImages !== "") localStorage.setItem(LS.fetchImages, d.fetchImages);
   if (d.bulletSep != null && d.bulletSep !== "") localStorage.setItem(LS.bulletSep, d.bulletSep);
   if (d.shopifyImgFix != null && d.shopifyImgFix !== "") localStorage.setItem(LS.shopifyImgFix, d.shopifyImgFix);
   if (d.testIcon != null) localStorage.setItem(LS.testIcon, d.testIcon);
@@ -2334,6 +2345,7 @@ const LS = {
   systemPrompt: "icepim_system_prompt",
   brand: "icepim_brand",
   htmlMode: "icepim_html_mode",
+  fetchImages: "icepim_fetch_images",
   bulletSep: "icepim_bullet_sep",
   shopifyImgFix: "icepim_shopify_img_fix",
   testIcon: "icepim_test_icon_url",
@@ -2356,6 +2368,7 @@ function loadSettings() {
   if (m) $("#model").value = m;
   $("#system-prompt").value = localStorage.getItem(LS.systemPrompt) || DEFAULT_SYSTEM_PROMPT;
   $("#html-mode").checked = localStorage.getItem(LS.htmlMode) === "1";
+  $("#fetch-images-mode").checked = localStorage.getItem(LS.fetchImages) !== "0";
   $("#bullet-sep").value = localStorage.getItem(LS.bulletSep) || "/";
   $("#shopify-img-fix").checked = localStorage.getItem(LS.shopifyImgFix) !== "0";
   if ($("#test-icon-url")) {
@@ -2571,6 +2584,10 @@ function buildUserContent(product, pdfData) {
   txt += `- detected_brand: angiv det brand du FAKTISK aflæste på kilden (tom streng hvis intet brand kunne aflæses tydeligt). Skriv kun hvad kilden siger — kopiér aldrig det forventede brand herind medmindre kilden bekræfter det.\n`;
   txt += `- product_found: sæt true KUN hvis du med rimelig sikkerhed fandt det specifikke produkt (matchende GTIN/MPN) på en troværdig kilde. Hvis ikke, sæt false og returnér tomme felter frem for at udlede data ud fra det forventede brand.\n`;
   txt += `- BILLEDER ved uvished: hvis product_found er false, eller hvis det brand du aflæste IKKE matcher det forventede brand, så returnér en TOM image_urls-liste. Vedhæft ALDRIG billeder af et andet produkt — heller ikke et andet produkt fra det forventede brand. Forkerte billeder er lige så vildledende som opdigtet tekst.\n\n`;
+  // *** NY *** (5.11.0) Billeder slået fra for kørslen: overstyr AL billed-vejledning.
+  if (!imagesEnabled()) {
+    txt += `BILLEDER: SLÅET FRA for denne kørsel. Returnér en TOM image_urls-liste. Brug INGEN søgninger eller fetches på at finde billeder — ignorér al billed-vejledning i brand-noterne ovenfor. Hele dit søge/fetch-budget skal gå til tekst og data.\n\n`;
+  }
   // *** NY *** (v5.5) Tilgængelige ikoner — modellen vælger ét matchende id pr. feature.
   const _icons = getIcons();
   const _iconIds = Object.keys(_icons);
@@ -2589,6 +2606,12 @@ function buildUserContent(product, pdfData) {
   txt += "Find produktet og lever de berigede data ved at kalde submit_product_data-tool'et.";
   parts.push({ type: "text", text: txt });
   return parts;
+}
+
+// *** NY *** (5.11.0) Skal billeder hentes i denne kørsel? (flueben i INPUT, default til)
+function imagesEnabled() {
+  const el = $("#fetch-images-mode");
+  return el ? el.checked : true;
 }
 
 // parseModelJson og escapeControlCharsInJsonStrings er fjernet i v3.0-alpha-1.
@@ -2842,6 +2865,9 @@ async function callClaude(product) {
   let imageDiag = { returnedByModel: 0, kept: 0, removed: [] };
   if (Array.isArray(parsed.image_urls)) {
     const brandCfg = BRANDS[$("#brand").value];
+    // *** NY *** (5.11.0) Billeder slået fra: tøm alt modellen måtte have returneret
+    // alligevel — eksporten skal have tomme billed-kolonner (importer: 'tilføj til eksisterende').
+    if (!imagesEnabled()) parsed.image_urls = [];
     const returnedByModel = parsed.image_urls.filter(u => u && u.trim()).length;
     const { kept, removed } = filterImageUrls(parsed.image_urls, brandCfg);
     imageDiag = { returnedByModel, kept: kept.length, removed, topUpAdded: 0 };
@@ -2863,7 +2889,7 @@ async function callClaude(product) {
     // produktet er et helt andet (brand-mismatch / product_found=false) — det gav
     // AU335-billeder på en Netgear-enhed. Billeder af forkert produkt = vildledende.
     const verified = parsed.product_found !== false && !brandsConflict(selectedBrand, parsed.detected_brand);
-    if (verified && kept.length < IMAGE_TARGET) {
+    if (imagesEnabled() && verified && kept.length < IMAGE_TARGET) {
       try {
         const extra = await fetchProductImages({
           apiKey, model, headers, maxSearches, maxFetches,
@@ -4293,6 +4319,11 @@ function init() {
     localStorage.setItem(LS.htmlMode, e.target.checked ? "1" : "0");
     cloudSaveSettings();
     renderResults();
+  });
+  // *** NY *** (5.11.0) Hent billeder til/fra pr. kørsel
+  $("#fetch-images-mode").addEventListener("change", e => {
+    localStorage.setItem(LS.fetchImages, e.target.checked ? "1" : "0");
+    cloudSaveSettings();
   });
   $("#bullet-sep").addEventListener("change", e => {
     localStorage.setItem(LS.bulletSep, e.target.value);
